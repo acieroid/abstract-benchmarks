@@ -1,5 +1,17 @@
 #lang racket
+;; Converts Scheme expressions to ANF by preserving most of the semantics.
+;; Some cases of incompatibilities are:
+;;   - let becomes equivalent to let*
+;;   - no support for mutual recursion
+
 (require racket/match)
+
+;; '(1 2 3) -> '((1 2) . 3
+(define (split-last l)
+  (if (null? (cdr l))
+      `(() . ,(car l))
+      (match (split-last (cdr l))
+        [(cons rest last) (cons (cons (car l) rest) last)])))
 
 (define (atom? exp)
   (not (pair? exp)))
@@ -67,6 +79,16 @@
        (insert-in defs-cond `(if ,var-cond
                               ,(to-anf (caddr exp))
                               ,(to-anf (cadddr exp))))]))
+   ;; (begin e1 e2 ...) -> (let ((_ e1)) (let ((_ e2)) ...))
+   ((equal? (car exp) 'begin)
+    (to-anf
+     (match (split-last (cdr exp))
+       [(cons exps last)
+        (insert-in (foldl (lambda (e acc)
+                            (insert-in acc `(let ((,(newid) ,e)) __)))
+                          '__
+                          exps)
+                   last)])))
    ;; (let ((id e)) e) -> (let ... (let ((id ce)) e))
    ((or (equal? (car exp) 'let) (equal? (car exp) 'letrec))
     (match (extract-defs (cadr (caadr exp)))
@@ -104,16 +126,52 @@
    (else
     (map simplify-lets exp))))
 
+;; Only works with a bunch of defines followed by one main expression
+(define (remove-defines exps)
+  (foldl (lambda (e acc)
+           (cond
+            ((equal? (car e) 'define)
+             (if (pair? (cadr e))
+                 (insert-in acc `(letrec ((,(caadr e) (lambda ,(cdadr e) ,(caddr e)))) __))
+                 (insert-in acc `(let ((,(cadr e) ,(caddr e))) __))))
+            (else (insert-in acc e))))
+         '__
+         exps))
+
 ;; (simplify-lets '(letrec ((x 1) (y 2)) x))
 
-(define (convert exp)
+(define (convert1 exp)
   (to-anf (simplify-lets exp)))
 
+(define (convert exps)
+  (to-anf (simplify-lets (remove-defines exps))))
+
 (define (test exp)
-  (equal? (eval exp) (eval (convert exp))))
+  (equal? (eval exp) (eval (convert1 exp))))
 
 ;; (test '(let ((x 42)) (set! x (+ x 1))))
 ;; (test '(let ((x 42)) (+ x 1)))
 ;; (test '(* (+ 4 1) 3))
 ;; (test '((lambda (x) (set! x (+ x 1))) 3))
 ;; (test '(let ((x 42)) (+ x (* x 2))))
+;; (test '(begin 1 2 3))
+
+(eval (convert '(
+           (define (phi x1 x2 x3 x4)
+             (and (or x1 (not x2) (not x3))
+                  (or (not x2) (not x3))
+                  (or x4 x2)))
+
+           (define (try f)
+             (or (f #t) (f #f)))
+
+           (define (sat-solve-4 p)
+             (try (lambda (n1)
+                    (try (lambda (n2)
+                           (try (lambda (n3)
+                                  (try (lambda (n4)
+                                         (p n1 n2 n3 n4))))))))))
+
+           (sat-solve-4 phi))))
+
+ 
