@@ -123,6 +123,8 @@
                         '__
                         (cadr exp))
                  (simplify-lets (caddr exp)))))
+   ((equal? (car exp) 'let*)
+    (simplify-lets (cons 'let (cdr exp))))
    (else
     (map simplify-lets exp))))
 
