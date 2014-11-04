@@ -1,0 +1,6 @@
+  - =scm= contains small benchmarks
+  - =scm-big= contains relatively big benchmarks
+  - =scm-mut= contains benchmarks that make use of =set!=
+
+The =anf= counterpart of those directories contains the same benchmarks
+translated in ANF λ-calculus.
