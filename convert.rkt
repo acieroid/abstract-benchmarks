@@ -92,7 +92,7 @@
    ;; (let ((id e)) e) -> (let ... (let ((id ce)) e))
    ((or (equal? (car exp) 'let) (equal? (car exp) 'letrec))
     (match (extract-defs (cadr (caadr exp)))
-      [(cons defs var) (insert-in defs `(,(car exp) ((,(caaadr exp) ,var))
+      [(cons defs var) (insert-in defs `(,(car exp) ((,(caaadr exp) ,(to-anf var)))
                                          ,(to-anf (caddr exp))))]))
    ;; (f e...) -> (let ... (f ae...))
    (else
@@ -155,23 +155,5 @@
 ;; (test '((lambda (x) (set! x (+ x 1))) 3))
 ;; (test '(let ((x 42)) (+ x (* x 2))))
 ;; (test '(begin 1 2 3))
-
-(eval (convert '(
-           (define (phi x1 x2 x3 x4)
-             (and (or x1 (not x2) (not x3))
-                  (or (not x2) (not x3))
-                  (or x4 x2)))
-
-           (define (try f)
-             (or (f #t) (f #f)))
-
-           (define (sat-solve-4 p)
-             (try (lambda (n1)
-                    (try (lambda (n2)
-                           (try (lambda (n3)
-                                  (try (lambda (n4)
-                                         (p n1 n2 n3 n4))))))))))
-
-           (sat-solve-4 phi))))
-
- 
+;; (convert1 '(letrec ((x (lambda (x) (+ (* x 2) 3)))) (x 0)))
+;; (convert1 '(lambda (x) (+ (* x 2) 3)))
