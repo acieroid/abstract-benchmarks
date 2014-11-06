@@ -18,13 +18,14 @@
 
 ;; true for expressions that don't need to extract definitions to become atomic
 (define (extract-free? exp)
-  (or (atom? exp) (equal? (car exp) 'lambda)))
+  (or (atom? exp) (equal? (car exp) 'lambda)
+      (equal? (car exp) 'let) (equal? (car exp) 'letrec) (equal? (car exp) 'let*)))
 
 ;; insert-in (let ((x 0)) __) x -> (let ((x 0)) x)
 (define (insert-in e1 e2)
   (cond
    ((equal? e1 '__) e2)
-   ((or (equal? (car e1) 'let) (equal? (car e1) 'letrec))
+   ((or (equal? (car e1) 'let) (equal? (car e1) 'letrec) (equal? (car e1) 'let*))
     `(,(car e1) ,(cadr e1) ,(insert-in (caddr e1) e2)))))
 
 ;; (insert-in '(let ((x 0)) __) 'x)
@@ -42,9 +43,13 @@
   (cond
    ((extract-free? exp) (cons '__ exp))
    ((equal? (car exp) 'set!)
-    (extract-defs (caddr exp)))
+    (match (extract-defs (caddr exp))
+      [(cons defs var)
+       (cons defs `(set! ,(cadr exp) ,var))]))
    ((equal? (car exp) 'if)
-    (extract-defs (cadr exp)))
+    (match (extract-defs (cadr exp))
+      [(cons defs var)
+       (cons defs `(if ,var ,(caddr exp) ,(cadddr exp)))]))
    (else
     (match (foldl (lambda (e acc)
                    (match (extract-defs e)
@@ -59,6 +64,8 @@
                var))]))))
 
 ;; (extract-defs '(set! x (+ x 1)))
+;; (extract-defs '(let ((x (set! x 1))) y))
+;; (extract-defs '(if (> x 1) a b))
 
 (define (to-anf exp)
   (cond
@@ -85,15 +92,19 @@
      (match (split-last (cdr exp))
        [(cons exps last)
         (insert-in (foldl (lambda (e acc)
-                            (insert-in acc `(let ((,(newid) ,e)) __)))
+                            (insert-in acc `(let ((,(newid) ,(to-anf e))) __)))
                           '__
                           exps)
                    last)])))
    ;; (let ((id e)) e) -> (let ... (let ((id ce)) e))
    ((or (equal? (car exp) 'let) (equal? (car exp) 'letrec))
-    (match (extract-defs (cadr (caadr exp)))
-      [(cons defs var) (insert-in defs `(,(car exp) ((,(caaadr exp) ,(to-anf var)))
-                                         ,(to-anf (caddr exp))))]))
+    (let ((kwd (car exp))
+          (boundvar (caaadr exp))
+          (subexp (cadr (caadr exp)))
+          (body (caddr exp)))
+      (match (extract-defs subexp)
+        [(cons defs var)(insert-in defs `(,kwd ((,boundvar ,(to-anf var)))
+                                           ,(to-anf body)))])))
    ;; (f e...) -> (let ... (f ae...))
    (else
     (if (foldl (lambda (e acc)
@@ -158,6 +169,7 @@
 ;; (test '((lambda (x) (set! x (+ x 1))) 3))
 ;; (test '(let ((x 42)) (+ x (* x 2))))
 ;; (test '(begin 1 2 3))
-;; (convert1 '(letrec ((x (lambda (x) (+ (* x 2) 3)))) (x 0)))
-;; (convert1 '(lambda (x) (+ (* x 2) 3)))
-;; (convert1 '(let ((x 1) (y 2)) y))
+;; (test '(letrec ((x (lambda (x) (+ (* x 2) 3)))) (x 0)))
+;; (test '((lambda (x) (+ (* x 2) 3)) 10))
+;; (test '(let ((x 1) (y 2)) y))
+;; (test '(let ((x 0)) (begin (set! x 1) (set! x 2) x)))
