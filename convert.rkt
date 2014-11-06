@@ -119,7 +119,7 @@
    ((or (equal? (car exp) 'let) (equal? (car exp) 'letrec))
     (let ((sym (car exp)))
       (insert-in (foldl (lambda (binding acc)
-                          (insert-in acc `(,sym (,binding) __)))
+                          (insert-in acc `(,sym ((,(car binding) ,(simplify-lets (cadr binding)))) __)))
                         '__
                         (cadr exp))
                  (simplify-lets (caddr exp)))))
@@ -141,6 +141,7 @@
          exps))
 
 ;; (simplify-lets '(letrec ((x 1) (y 2)) x))
+;; (simplify-lets '(let ((x (lambda (x) (let ((x 1) (y 2)) (+ x y))))
 
 (define (convert1 exp)
   (to-anf (simplify-lets exp)))
@@ -159,3 +160,4 @@
 ;; (test '(begin 1 2 3))
 ;; (convert1 '(letrec ((x (lambda (x) (+ (* x 2) 3)))) (x 0)))
 ;; (convert1 '(lambda (x) (+ (* x 2) 3)))
+;; (convert1 '(let ((x 1) (y 2)) y))
