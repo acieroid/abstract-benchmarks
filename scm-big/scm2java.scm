@@ -73,17 +73,15 @@
             (append (cdr lst1) lst2))))
 
 (define (string->list s)
-  (define (f i)
-    (if (< i (string-length s))
-        (cons (string-ref s i)
-              (f (+ i 1)))
-        '()))
-  (f 0))
-
-
+  (letrec ((f (lambda (i)
+                (if (< i (string-length s))
+                    (cons (string-ref s i)
+                          (f (+ i 1)))
+                    '()))))
+    (f 0)))
 
 ; void : -> void
-(define (void) (if #f #t))
+(define (void) #f)
 
 ; tagged-list? : symbol value -> boolean
 (define (tagged-list? tag l)
@@ -190,7 +188,7 @@
 (define (begin? exp) 
   (tagged-list? 'begin exp))
 
-; begin->exps : begin-exp -> list[exp]
+; begin-i>exps : begin-exp -> list[exp]
 (define (begin->exps exp)
   (cdr exp))
 
@@ -215,7 +213,7 @@
   (if (let? exp)
       (let ((vars (map car (let->bindings exp)))
             (args (map cadr (let->bindings exp))))
-        `((lambda (,@vars) ,(let->exp exp)) ,@args))
+        (cons (cons 'lambda (cons vars (cons (let->exp exp) '()))) args))
       exp))
 
 
@@ -232,8 +230,43 @@
        
 ; Yn generates the Y combinator for n-arity procedures.
 (define (Yn n)
-  `((lambda (h) (lambda (F) (F (lambda (,@(xargs n)) (((h h) F) ,@(xargs n))))))
-    (lambda (h) (lambda (F) (F (lambda (,@(xargs n)) (((h h) F) ,@(xargs n))))))))
+  ;; Was:
+  ;; `((lambda (h) (lambda (F) (F (lambda (,@(xargs n)) (((h h) F) ,@(xargs n))))))
+  ;;   (lambda (h) (lambda (F) (F (lambda (,@(xargs n)) (((h h) F) ,@(xargs n)))))))
+  (cons
+   (cons 'lambda
+         (cons (cons 'h '())
+               (cons
+                (cons 'lambda
+                      (cons (cons 'F '())
+                            (cons (cons 'F
+                                        (cons (cons 'lambda
+                                                    (cons (xargs n)
+                                                          (cons
+                                                           (cons
+                                                            (cons (cons 'h (cons 'h '())) (cons 'F '()))
+                                                            (xargs n))
+                                                           '())))
+                                              '()))
+                                  '())))
+                '())))
+   (cons (cons 'lambda
+               (cons (cons 'h '())
+                     (cons
+                      (cons 'lambda
+                            (cons (cons 'F '())
+                                  (cons (cons 'F
+                                              (cons (cons 'lambda
+                                                          (cons (xargs n)
+                                                                (cons
+                                                                 (cons
+                                                                  (cons (cons 'h (cons 'h '())) (cons 'F '()))
+                                                                  (xargs n))
+                                                                 '())))
+                                                    '()))
+                                        '())))
+                      '())))
+         '())))
 
 ; letrec1=>Y : letrec1-exp -> let-exp
 (define (letrec1=>Y exp)
@@ -242,22 +275,41 @@
              (name     (car binding))
              (arg      (cadr binding))
              (num-args (arity arg)))
-        `(let ((,name (,(Yn num-args) (lambda (,name) ,arg))))
-           ,(letrec1->exp exp)))
+        ;; Was:
+        ;; `(let ((,name (,(Yn num-args) (lambda (,name) ,arg))))
+        ;;    ,(letrec1->exp exp))
+        (cons 'let
+              (cons
+               (cons (cons name
+                            (cons (cons (Yn num-args)
+                                        (cons (cons 'lambda (cons (cons name '()) (cons arg '())))
+                                              '()))
+                                  '()))
+                     '())
+               (cons (letrec1-exp exp) '()))))
       exp))
         
 ; begin=>let : begin-exp -> let-exp
+(define (singlet? l)
+  (and (list? l)
+       (= (length l) 1)))
+
+(define (dummy-bind exps)
+  (if (singlet? exps)
+      (car exps)
+      (if (pair? exps)
+          ;; Was:
+          ;; `(let (($_ ,(car exps)))
+          ;;    ,(dummy-bind (cdr exps)))
+          (cons 'let
+                (cons
+                 (cons (cons '$_
+                             (cons (car exps) '()))
+                       '())
+                 (cons (dummy-bind (cdr exps)) '())))
+          (error "no match"))))
+
 (define (begin=>let exp)
-  (define (singlet? l)
-    (and (list? l)
-         (= (length l) 1)))
-  
-  (define (dummy-bind exps)
-    (cond
-      ((singlet? exps)  (car exps))
-      
-      ((pair? exps)     `(let (($_ ,(car exps)))
-                          ,(dummy-bind (cdr exps))))))
   (dummy-bind (begin->exps exp)))
 
 
@@ -275,40 +327,36 @@
   (set! mutable-variables (cons symbol mutable-variables)))
 
 ; is-mutable? : symbol -> boolean
+(define (is-in? S symbol)
+  (if (not (pair? S))
+      #f
+      (if (eq? (car S) symbol)
+          #t
+          (is-in? (cdr S) symbol))))
+
 (define (is-mutable? symbol)
-  (define (is-in? S)
-    (if (not (pair? S))
-        #f
-        (if (eq? (car S) symbol)
-            #t
-            (is-in? (cdr S)))))
-  (is-in? mutable-variables))
+  (is-in? mutable-variables symbol))
 
 ; analyze-mutable-variables : exp -> void
 (define (analyze-mutable-variables exp)
-  (cond 
-    ((const? exp)    (void))
-    ((ref? exp)      (void))
-    ((prim? exp)     (void))
-    ((lambda? exp)   (analyze-mutable-variables (lambda->exp exp)))
-    ((let? exp)      (begin
-                       (map analyze-mutable-variables (map cadr (let->bindings exp)))
-                       (analyze-mutable-variables (let->exp exp))))
-    ((letrec1? exp)  (begin
-                       (analyze-mutable-variables (cadr (letrec1->binding exp)))
-                       (analyze-mutable-variables (letrec1->exp exp))))
-    ((set!? exp)     (mark-mutable (set!-var exp)))
-    ((if? exp)       (begin
-                       (analyze-mutable-variables (if->condition exp))
-                       (analyze-mutable-variables (if->then exp))
-                       (analyze-mutable-variables (if->else exp))))
-    ((begin? exp)    (begin
-                       (map analyze-mutable-variables (begin->exps exp))
-                       (void)))
-    ((app? exp)      (begin 
-                       (map analyze-mutable-variables exp)
-                       (void)))
-    (else            (error "unknown expression type: " exp))))
+  (if (const? exp) (void)
+      (if (ref? exp) (void)
+          (if (prim? exp) (void)
+              (if (lambda? exp) (analyze-mutable-variables (lambda->exp exp))
+                  (if (let? exp) (begin
+                                   (map analyze-mutable-variables (map cadr (let->bindings exp)))
+                                   (analyze-mutable-variables (let->exp exp)))
+                      (if (letrec1? exp) (begin (analyze-mutable-variables (cadr (letrec1->binding exp)))
+                                                 (analyze-mutable-variables (letrec1->exp exp)))
+                          (if (set!? exp) (mark-mutable (set!-var exp))
+                              (if (if? exp) (begin (analyze-mutable-variables (if->condition exp))
+                                                   (analyze-mutable-variables (if->then exp))
+                                                   (analyze-mutable-variables (if->else exp)))
+                                  (if (begin? exp) (begin (map analyze-mutable-variables (begin->exps exp))
+                                                          (void))
+                                      (if (app? exp) (begin (map analyze-mutable-variables exp)
+                                                            (void))
+                                          (error "unknown expression type: " exp))))))))))))
 
 
 
@@ -319,74 +367,43 @@
 ;; foo-bar/baz are not identifiers in Java.
 
 ; mangle : symbol -> string
+(define (m chars)
+  (if (null? chars)
+      '()
+      (if (or (and (char-alphabetic? (car chars)) (not (char=? (car chars) #\_)))
+              (char-numeric? (car chars)))
+          (cons (car chars) (m (cdr chars)))
+          (cons #\_ (append (integer->char-list (char->natural (car chars)))
+                            (m (cdr chars)))))))
+
 (define (mangle symbol)
-  (define (m chars)
-    (if (null? chars)
-        '()
-        (if (or (and (char-alphabetic? (car chars)) (not (char=? (car chars) #\_)))
-                (char-numeric? (car chars)))
-            (cons (car chars) (m (cdr chars)))
-            (cons #\_ (append (integer->char-list (char->natural (car chars)))
-                              (m (cdr chars)))))))
   (list->string (m (string->list (symbol->string symbol)))))
 
 
 
 ;; Compilation routines.
 
-; java-compile-program : exp -> string
-(define (java-compile-program exp)
-  (string-append 
-   "public class BOut extends RuntimeEnvironment {\n"
-   " public static void main (String[] args) {\n"
-   (java-compile-exp exp) 
-   " ;\n"
-   " }\n"
-   "}\n"))
-
-; java-compile-exp : exp -> string
-(define (java-compile-exp exp)
-  (cond
-    ; core forms:
-    ((const? exp)       (java-compile-const exp))
-    ((prim?  exp)       (java-compile-prim exp))
-    ((ref?   exp)       (java-compile-ref exp))
-    ((lambda? exp)      (java-compile-lambda exp))
-    ((if? exp)          (java-compile-if exp))
-    ((set!? exp)        (java-compile-set! exp))
-    
-    ; syntactic sugar:
-    ((let? exp)         (java-compile-exp (let=>lambda exp)))
-    ((letrec1? exp)     (java-compile-exp (letrec1=>Y exp)))
-    ((begin? exp)       (java-compile-exp (begin=>let exp)))
-    
-    ; applications:
-    ((app? exp)         (java-compile-app exp))))
-
-
 ; java-compile-const : const-exp -> string
 (define (java-compile-const exp)
-  (cond
-    ((integer? exp) (string-append 
-                     "new IntValue(" (number->string exp) ")"))
-    (else           (error "unknown constant: " exp))))
+  (if (integer? exp)
+      (string-append "new IntValue(" (number->string exp) ")")
+      (error "unknown constant: " exp)))
 
 ; java-compile-prim : prim-exp -> string
 (define (java-compile-prim p)
-  (cond
-    ((eq? '+ p)       "sum")
-    ((eq? '- p)       "difference")
-    ((eq? '* p)       "product")
-    ((eq? '= p)       "numEqual")
-    ((eq? 'display p) "display")
-    (else             (error "unhandled primitive " p))))
+  (if (eq? '+ p) "sum"
+      (if (eq? '- p) "difference"
+          (if (eq? '* p) "product"
+              (if (eq? '= p) "numEqual"
+                  (if (eq? 'display p) "display"
+                      (error "unhandled primitive " p)))))))
 
 ; java-compile-ref : ref-exp -> string
 (define (java-compile-ref exp)
-  (cond
-    ((is-mutable? exp) (string-append "m_" (mangle exp) ".value"))
-    (else              (mangle exp))))
-  
+  (if (is-mutable? exp)
+      (string-append "m_" (mangle exp) ".value")
+      (mangle exp)))
+
 ; java-compile-formals : list[symbol] -> string
 (define (java-compile-formals formals)
   (if (not (pair? formals))
@@ -399,24 +416,24 @@
            ""))))
  
 ; java-compile-lambda : lambda-exp -> string
+(define (java-wrap-mutables vars)
+  (if (not (pair? vars))
+      ""
+      (string-append
+       (if (is-mutable? (car vars))
+           (string-append 
+            " final ValueCell m_" (mangle (car vars)) 
+            " = new ValueCell(" (mangle (car vars)) ");\n")
+           "")
+       (java-wrap-mutables (cdr vars)))))
+
 (define (java-compile-lambda exp)
-  (define (java-wrap-mutables vars)
-    (if (not (pair? vars))
-        ""
-        (string-append
-         (if (is-mutable? (car vars))
-             (string-append 
-              " final ValueCell m_" (mangle (car vars)) 
-              " = new ValueCell(" (mangle (car vars)) ");\n")
-             "")
-         (java-wrap-mutables (cdr vars)))))
-  
   (let* ((formals (lambda->formals exp))
          (num-args (length formals)))
     (string-append
      "new NullProcValue" (number->string num-args) " () {\n"
      " public Value apply(" (java-compile-formals formals) ") {\n"
-     ; wrap mutables in ValueCell objects:
+                                        ; wrap mutables in ValueCell objects:
      (java-wrap-mutables formals)
      "\n"
      "  return " (java-compile-exp (lambda->exp exp)) " ;\n"
@@ -458,15 +475,41 @@
        (java-compile-exp (if->else exp)) ")"))
 
 
+; java-compile-exp : exp -> string
+(define (java-compile-exp exp)
+  ; core forms:
+  (if (const? exp) (java-compile-const exp)
+      (if (prim?  exp) (java-compile-prim exp)
+          (if (ref?   exp) (java-compile-ref exp)
+              (if (lambda? exp) (java-compile-lambda exp)
+                  (if (if? exp) (java-compile-if exp)
+                      (if (set!? exp) (java-compile-set! exp)
+                          ; syntactic sugar:
+                          (if (let? exp) (java-compile-exp (let=>lambda exp))
+                              (if (letrec1? exp) (java-compile-exp (letrec1=>Y exp))
+                                  (if (begin? exp) (java-compile-exp (begin=>let exp))
+                                      ; applications:
+                                      (if (app? exp) (java-compile-app exp)
+                                          (error "no match"))))))))))))
+
+
+
+; java-compile-program : exp -> string
+(define (java-compile-program exp)
+  (string-append 
+   "public class BOut extends RuntimeEnvironment {\n"
+   " public static void main (String[] args) {\n"
+   (java-compile-exp exp) 
+   " ;\n"
+   " }\n"
+   "}\n"))
 
 ;; Read in an expression, compile it, and print it out:
 
 ;; Hard-coded program for static analysis benchmarking.
 (define input-program 3)
 
-(analyze-mutable-variables input-program)
-
-(java-compile-program input-program)
+(begin (analyze-mutable-variables input-program)
+       (java-compile-program input-program))
 
 ;; The resulting program requires Value.java to compile.
-
