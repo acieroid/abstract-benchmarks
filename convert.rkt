@@ -3,6 +3,7 @@
 ;; Some cases of incompatibilities are:
 ;;   - let becomes equivalent to let*
 ;;   - no support for mutual recursion
+;;   - no support (yet) for case
 
 (require racket/match)
 
@@ -67,6 +68,44 @@
 ;; (extract-defs '(let ((x (set! x 1))) y))
 ;; (extract-defs '(if (> x 1) a b))
 
+
+;; Only works with a bunch of defines followed by one main expression
+(define (remove-defines exps)
+  (foldl (lambda (e acc)
+           (cond
+            ((equal? (car e) 'define)
+             (if (pair? (cadr e))
+                 (insert-in acc `(letrec ((,(caadr e) (lambda ,(cdadr e) ,(caddr e)))) __))
+                 (insert-in acc `(let ((,(cadr e) ,(caddr e))) __))))
+            (else (insert-in acc e))))
+         '__
+         exps))
+
+;; (quote foo) -> (quote foo)
+;; (quote (foo bar (baz))) -> (cons 'foo (cons 'bar (cons (cons 'baz '()) '())))
+;; (quote (foo ...) -> (cons 'foo (rec ...))
+;; anything else -> no modification (does not handle quotes nested inside expressions)
+(define (simplify-quote exp)
+  (if (and (pair? exp) (equal? (car exp) 'quote))
+      (letrec ((loop (lambda (e)
+                       (cond
+                        ((null? e) '(quote ()))
+                        ((pair? e) `(cons ,(loop (car e)) ,(loop (cdr e))))
+                        (else `(quote ,e))))))
+        (loop (cadr exp)))
+      exp))
+
+;; (cond (cnd1 e1 e2) (else e3)) -> (if cnd1 (begin e1 e2) e3)
+;; (cond (cnd1 e1) (cnd2 e2) (else e3)) -> (if cnd1 e1 (if cnd2 e2 e3))
+(define (remove-cond exp)
+  (if (and (pair? exp) (equal? (car exp) 'cond))
+      (if (equal? (caadr exp) 'else)
+          `(begin ,@(cdadr exp))
+          `(if ,(caadr exp)
+               (begin ,@(cdadr exp))
+               ,(remove-cond `(cond ,@(cddr exp)))))
+      exp))
+
 (define (to-anf exp)
   (cond
    ;; v
@@ -74,7 +113,7 @@
     exp)
    ;; lam
    ((equal? (car exp) 'lambda)
-    `(lambda ,(cadr exp) ,(to-anf (caddr exp))))
+    `(lambda ,(cadr exp) ,(to-anf (remove-defines (caddr exp)))))
    ;; (set! v e) -> (let ... (set! v ae))
    ((equal? (car exp) 'set!)
     (match (extract-defs (caddr exp))
@@ -104,7 +143,11 @@
           (body (caddr exp)))
       (match (extract-defs subexp)
         [(cons defs var)(insert-in defs `(,kwd ((,boundvar ,(to-anf var)))
-                                           ,(to-anf body)))])))
+                                               ,(to-anf body)))])))
+   ((equal? (car exp) 'cond)
+    (to-anf (remove-cond exp)))
+   ((and (equal? (car exp) 'quote) (pair? (cadr exp)))
+    (to-anf (simplify-quote exp)))
    ;; (f e...) -> (let ... (f ae...))
    (else
     (if (foldl (lambda (e acc)
@@ -138,18 +181,6 @@
     (simplify-lets (cons 'let (cdr exp))))
    (else
     (map simplify-lets exp))))
-
-;; Only works with a bunch of defines followed by one main expression
-(define (remove-defines exps)
-  (foldl (lambda (e acc)
-           (cond
-            ((equal? (car e) 'define)
-             (if (pair? (cadr e))
-                 (insert-in acc `(letrec ((,(caadr e) (lambda ,(cdadr e) ,(caddr e)))) __))
-                 (insert-in acc `(let ((,(cadr e) ,(caddr e))) __))))
-            (else (insert-in acc e))))
-         '__
-         exps))
 
 ;; (simplify-lets '(letrec ((x 1) (y 2)) x))
 ;; (simplify-lets '(let ((x (lambda (x) (let ((x 1) (y 2)) (+ x y))))
