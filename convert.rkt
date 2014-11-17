@@ -113,7 +113,7 @@
                        #f)))))
       exp))
 
-;; (let ((x 1) (y 2)) body) -> (let ((x 1)) (let ((y 2)) body))
+;; (let ((x 1) (y 2)) body) -> (let ((x 1)) (let ((y 2)) (begin body)))
 ;; Won't preverve semantics in the presence of mutual recursion
 (define (simplify-lets exp)
   (if (pair? exp)
@@ -124,7 +124,9 @@
                               (insert-in acc `(,sym ((,(car binding) ,(simplify-lets (cadr binding)))) __)))
                             '__
                             (cadr exp))
-                     (simplify-lets (caddr exp)))))
+                     (if (= (length (cddr exp)) 1)
+                         (caddr exp)
+                         `(begin ,@(cddr exp))))))
        ((equal? (car exp) 'let*)
         (simplify-lets (cons 'let (cdr exp))))
        (else

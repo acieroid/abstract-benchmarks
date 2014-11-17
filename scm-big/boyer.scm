@@ -650,5 +650,4 @@
 
 
 ;;; make sure you've run (setup) then call:  (test))
-(display "running...") (newline)
 (run-benchmark "Boyer" (lambda () (setup) (test)))
