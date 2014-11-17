@@ -4,6 +4,7 @@
 ;;   - let becomes equivalent to let*
 ;;   - no support for mutual recursion
 ;;   - no support (yet) for case
+;;   - doesn't seem to work with internal defines
 
 (require racket/match)
 
@@ -19,7 +20,7 @@
 
 ;; true for expressions that don't need to extract definitions to become atomic
 (define (extract-free? exp)
-  (or (atom? exp) (equal? (car exp) 'lambda)
+  (or (atom? exp) (equal? (car exp) 'lambda) (equal? (car exp) 'quote)
       (equal? (car exp) 'let) (equal? (car exp) 'letrec) (equal? (car exp) 'let*)))
 
 ;; insert-in (let ((x 0)) __) x -> (let ((x 0)) x)
@@ -204,8 +205,7 @@
 ;; (test '(let ((x 0)) (begin (set! x 1) (set! x 2) x)))
 
 (require racket/cmdline)
-(require racket/trace)
 (command-line
  #:args (filename)
  (let ((content (file->list filename)))
-   (display (convert content))))
+   (convert content)))

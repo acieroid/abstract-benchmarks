@@ -1,2 +1,2 @@
 ;; Expected result: bottom
-(letrec ((f (lambda () (f)))) (f))                  (
+(letrec ((f (lambda () (f)))) (f))
