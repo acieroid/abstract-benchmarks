@@ -70,16 +70,16 @@
 
 
 ;; Only works with a bunch of defines followed by one main expression
-(define (remove-defines exps)
-  (foldl (lambda (e acc)
-           (cond
-            ((equal? (car e) 'define)
-             (if (pair? (cadr e))
-                 (insert-in acc `(letrec ((,(caadr e) (lambda ,(cdadr e) ,(caddr e)))) __))
-                 (insert-in acc `(let ((,(cadr e) ,(caddr e))) __))))
-            (else (insert-in acc e))))
-         '__
-         exps))
+;; '((define x 1) foo) -> (letrec ((x 1)) foo)
+(define (remove-defines exp)
+  (if (and (pair? exp) (pair? (car exp)) (equal? (caar exp) 'define))
+      (let ((def (car exp)))
+        (if (pair? (cadr def))
+            (insert-in `(letrec ((,(caadr def) (lambda ,(cdadr def) ,(caddr def)))) __) (remove-defines (cdr exp)))
+            (insert-in `(let ((,(cadr def) ,(caddr def))) __) (remove-defines (cdr exp)))))
+      (if (= (length exp) 1)
+          (car exp)
+          `(begin ,@exp))))
 
 ;; (quote foo) -> (quote foo)
 ;; (quote (foo bar (baz))) -> (cons 'foo (cons 'bar (cons (cons 'baz '()) '())))
@@ -103,7 +103,30 @@
           `(begin ,@(cdadr exp))
           `(if ,(caadr exp)
                (begin ,@(cdadr exp))
-               ,(remove-cond `(cond ,@(cddr exp)))))
+               ,(remove-cond
+                 (if (pair? (cddr exp))
+                     `(cond ,@(cddr exp))
+                     (begin
+                       (display "cond with no fallthrough branch: ") (display exp) (newline)
+                       #f)))))
+      exp))
+
+;; (let ((x 1) (y 2)) body) -> (let ((x 1)) (let ((y 2)) body))
+;; Won't preverve semantics in the presence of mutual recursion
+(define (simplify-lets exp)
+  (if (pair? exp)
+      (cond
+       ((or (equal? (car exp) 'let) (equal? (car exp) 'letrec))
+        (let ((sym (car exp)))
+          (insert-in (foldl (lambda (binding acc)
+                              (insert-in acc `(,sym ((,(car binding) ,(simplify-lets (cadr binding)))) __)))
+                            '__
+                            (cadr exp))
+                     (simplify-lets (caddr exp)))))
+       ((equal? (car exp) 'let*)
+        (simplify-lets (cons 'let (cdr exp))))
+       (else
+        exp))
       exp))
 
 (define (to-anf exp)
@@ -113,7 +136,7 @@
     exp)
    ;; lam
    ((equal? (car exp) 'lambda)
-    `(lambda ,(cadr exp) ,(to-anf (remove-defines (caddr exp)))))
+    `(lambda ,(cadr exp) ,(to-anf (caddr exp))))
    ;; (set! v e) -> (let ... (set! v ae))
    ((equal? (car exp) 'set!)
     (match (extract-defs (caddr exp))
@@ -136,14 +159,15 @@
                           exps)
                    last)])))
    ;; (let ((id e)) e) -> (let ... (let ((id ce)) e))
-   ((or (equal? (car exp) 'let) (equal? (car exp) 'letrec))
-    (let ((kwd (car exp))
-          (boundvar (caaadr exp))
-          (subexp (cadr (caadr exp)))
-          (body (caddr exp)))
-      (match (extract-defs subexp)
-        [(cons defs var)(insert-in defs `(,kwd ((,boundvar ,(to-anf var)))
-                                               ,(to-anf body)))])))
+   ((or (equal? (car exp) 'let) (equal? (car exp) 'letrec) (equal? (car exp) 'let*))
+    (let ((exp (simplify-lets exp)))
+      (let ((kwd (car exp))
+            (boundvar (caaadr exp))
+            (subexp (cadr (caadr exp)))
+            (body (caddr exp)))
+        (match (extract-defs subexp)
+          [(cons defs var)(insert-in defs `(,kwd ((,boundvar ,(to-anf var)))
+                                                 ,(to-anf body)))]))))
    ((equal? (car exp) 'cond)
     (to-anf (remove-cond exp)))
    ((and (equal? (car exp) 'quote) (pair? (cadr exp)))
@@ -158,38 +182,12 @@
         (match (extract-defs exp)
           [(cons defs var) (insert-in defs var)])))))
 
-;; Won't preverve semantics in the presence of mutual recursion
-(define (simplify-lets exp)
-  (cond
-   ((atom? exp) exp)
-   ((equal? (car exp) 'lambda)
-    `(lambda ,(cadr exp) ,(simplify-lets (caddr exp))))
-   ((equal? (car exp) 'set!)
-    `(set! ,(cadr exp) ,(simplify-lets (caddr exp))))
-   ((equal? (car exp) 'if)
-    `(if ,(simplify-lets (cadr exp))
-      ,(simplify-lets (caddr exp))
-      ,(simplify-lets (cadddr exp))))
-   ((or (equal? (car exp) 'let) (equal? (car exp) 'letrec))
-    (let ((sym (car exp)))
-      (insert-in (foldl (lambda (binding acc)
-                          (insert-in acc `(,sym ((,(car binding) ,(simplify-lets (cadr binding)))) __)))
-                        '__
-                        (cadr exp))
-                 (simplify-lets (caddr exp)))))
-   ((equal? (car exp) 'let*)
-    (simplify-lets (cons 'let (cdr exp))))
-   (else
-    (map simplify-lets exp))))
-
-;; (simplify-lets '(letrec ((x 1) (y 2)) x))
-;; (simplify-lets '(let ((x (lambda (x) (let ((x 1) (y 2)) (+ x y))))
 
 (define (convert1 exp)
-  (to-anf (simplify-lets exp)))
+  (to-anf exp))
 
 (define (convert exps)
-  (to-anf (simplify-lets (remove-defines exps))))
+  (to-anf (remove-defines exps)))
 
 (define (test exp)
   (equal? (eval exp) (eval (convert1 exp))))
@@ -204,3 +202,10 @@
 ;; (test '((lambda (x) (+ (* x 2) 3)) 10))
 ;; (test '(let ((x 1) (y 2)) y))
 ;; (test '(let ((x 0)) (begin (set! x 1) (set! x 2) x)))
+
+(require racket/cmdline)
+(require racket/trace)
+(command-line
+ #:args (filename)
+ (let ((content (file->list filename)))
+   (display (convert content))))
