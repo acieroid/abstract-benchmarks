@@ -5,6 +5,7 @@
 ;;   - no support for mutual recursion
 ;;   - no support (yet) for case
 ;;   - doesn't seem to work with internal defines
+;;   - TODO: incorrectly rewrites lambdas with more than one expression inside
 
 (require racket/match)
 
