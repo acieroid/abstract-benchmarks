@@ -4,7 +4,6 @@
 ;;   - let becomes equivalent to let*
 ;;   - no support for mutual recursion
 ;;   - no support (yet) for case
-;;   - doesn't seem to work with internal defines
 
 (require racket/match)
 (require rackunit)
@@ -111,16 +110,13 @@
 (test (extract-defs '(let ((x (set! x (+ x 1)))) y)) '((let ((_1 (+ x 1))) (let ((x (set! x _1))) __)) . y))
 
 ;; Only works with a bunch of defines followed by one main expression
-;; '((define x 1) foo) -> (letrec ((x 1)) foo)
 (define (remove-defines exp)
   (if (and (pair? exp) (pair? (car exp)) (equal? (caar exp) 'define))
       (let ((def (car exp)))
         (if (pair? (cadr def))
             (insert-in `(letrec ((,(caadr def) (lambda ,(cdadr def) ,(caddr def)))) __) (remove-defines (cdr exp)))
             (insert-in `(let ((,(cadr def) ,(caddr def))) __) (remove-defines (cdr exp)))))
-      (if (= (length exp) 1)
-          (car exp)
-          `(begin ,@exp))))
+      (make-begin exp)))
 
 (test (remove-defines '((define x 1) x)) '(let ((x 1)) x))
 (test (remove-defines '((define (id x) x) (id 3))) '(letrec ((id (lambda (x) x))) (id 3)))
@@ -206,7 +202,7 @@
     exp)
    ;; lam
    ((equal? (car exp) 'lambda)
-    `(lambda ,(cadr exp) ,(to-anf (make-begin (cddr exp)))))
+    `(lambda ,(cadr exp) ,(to-anf (remove-defines (cddr exp)))))
    ;; (set! v e) -> (let ... (set! v ae))
    ((equal? (car exp) 'set!)
     (match (extract-defs (caddr exp))
@@ -289,6 +285,9 @@
 (test (to-anf '(f (lambda (x) (+ 1 (* x 2))))) '(f (lambda (x) (let ((_1 (* x 2))) (let ((_2 (+ 1 _1))) _2)))))
 (test (to-anf '(f (let ((x 1)) (* x (+ x 3))) (lambda (x) (display "foo") (+ (* 3 2) x)) (equal? 'foo '(bar baz))))
       '(let ((x 1)) (let ((_9 (+ x 3))) (let ((_1 _9)) (let ((_10 (* x _1))) (let ((_2 _10)) (let ((_11 (cons 'baz '()))) (let ((_7 _11)) (let ((_12 (cons 'bar _7))) (let ((_8 _12)) (let ((_13 (equal? 'foo _8))) (let ((_14 (f _2 (lambda (x) (let ((_4 (display "foo"))) (let ((_3 _4)) (let ((_5 (* 3 2))) (let ((_6 (+ _5 x))) _6))))) _13))) _14))))))))))))
+(test (to-anf '(lambda (x) (define foo 1) foo)) '(lambda (x) (let ((foo 1)) foo)))
+(test (to-anf '(lambda (x y) (define (foo x) x) (define bar (+ x y)) (foo bar)))
+      '(lambda (x y) (letrec ((foo (lambda (x) x))) (let ((_1 (+ x y))) (let ((bar _1)) (foo bar))))))
 
 (define (convert1 exp)
   (to-anf exp))
