@@ -4,8 +4,7 @@
 ;;   - let becomes equivalent to let*
 ;;   - no support for mutual recursion
 ;;   - no support (yet) for case
-;; TODO: (cond ((begin ...) ...) ...)
-;; TODO: (f (if ...))
+;;   - fails with (cond ((begin ...) ...) ...)
 (require racket/match)
 (require rackunit)
 
@@ -32,9 +31,7 @@
 
 ;; true for expressions that don't need to extract definitions to become atomic
 (define (extract-free? exp)
-  (or (atom? exp) (equal? (car exp) 'lambda)
-      ;; (equal? (car exp) 'let) (equal? (car exp) 'letrec) (equal? (car exp) 'let*)
-      ))
+  (or (atom? exp) (equal? (car exp) 'lambda)))
 
 (check-true (extract-free? 'foo))
 (check-true (extract-free? '(lambda (x) x)))
