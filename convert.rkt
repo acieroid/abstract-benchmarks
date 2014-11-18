@@ -4,8 +4,8 @@
 ;;   - let becomes equivalent to let*
 ;;   - no support for mutual recursion
 ;;   - no support (yet) for case
-;; TODO: (cons (quote foo) (quote bar)) should be rewritten with two lets
-
+;; TODO: (cond ((begin ...) ...) ...)
+;; TODO: (f (if ...))
 (require racket/match)
 (require rackunit)
 
@@ -165,7 +165,9 @@
    ((equal? (car exp) 'if)
     (match (extract-defs (cadr exp))
       [(cons defs var)
-       (cons defs `(if ,var ,(caddr exp) ,(cadddr exp)))]))
+       (let ((id (newid)))
+         (cons (insert-in defs `(let ((,id (if ,var ,(caddr exp) ,(cadddr exp)))) __))
+               id))]))
    ((or (equal? (car exp) 'let) (equal? (car exp) 'letrec))
     (let ((binding (caadr exp)))
       (match (extract-defs (cadr binding))
@@ -190,15 +192,16 @@
                var))]))))
 
 (test (extract-defs '(set! x (+ x 1))) '((let ((_1 (+ x 1))) __) . (set! x _1)))
-(test (extract-defs '(set! x '(foo ()))) '((let ((_1 (+ x 1))) __) . (set! x _1)))
+(test (extract-defs '(set! x '(foo ()))) '((let ((_1 (foo ()))) (let ((_2 (quote _1))) __)) set! x _2))
 (test (extract-defs '((id f) (id x))) '((let ((_1 (id f))) (let ((_2 (id x))) (let ((_3 (_1 _2))) __))) . _3))
 (test (extract-defs '(let ((x 1)) x)) '((let ((x 1)) __) . x))
 (test (extract-defs '(let ((x (set! x 1))) y)) '((let ((x (set! x 1))) __) . y))
-(test (extract-defs '(if (> x 1) a b)) '((let ((_1 (> x 1))) __) . (if _1 a b)))
+(test (extract-defs '(if (> x 1) a b)) '((let ((_1 (> x 1))) (let ((_2 (if _1 a b))) __)) . _2))
 (test (extract-defs '(f x (+ y 1))) '((let ((_1 (+ y 1))) (let ((_2 (f x _1))) __)) . _2))
 (test (extract-defs '(let ((x 1)) x)) '((let ((x 1)) __) . x))
 (test (extract-defs '(f (let ((x 1)) x))) '((let ((x 1)) (let ((_1 (f x))) __)) . _1))
 (test (extract-defs '(let ((x (set! x (+ x 1)))) y)) '((let ((_1 (+ x 1))) (let ((x (set! x _1))) __)) . y))
+(test (extract-defs '(if a b c)) '((let ((_1 (if a b c))) __) . _1))
 
 (define (to-anf exp)
   (cond
@@ -261,7 +264,7 @@
 (test (to-anf '(lambda (x) x x)) '(lambda (x) (let ((_1 x)) x)))
 (test (to-anf '(set! x 1)) '(set! x 1))
 (test (to-anf '(set! x (+ x 1))) '(let ((_1 (+ x 1))) (set! x _1)))
-(test (to-anf '(set! x (+ (* x 2) 1))) '(let ((_1 (* x 2))) (let ((_2 (+ _1 1))) (set! x _2))))
+(test (to-anf '(set! x (+ (* x 2) 1))) '(let ((_3 (* x 2))) (let ((_1 _3)) (let ((_4 (+ _1 1))) (let ((_2 _4)) (set! x _2))))))
 (test (to-anf '(if a b c)) '(if a b c))
 (test (to-anf '(if (= x 0) 1 2)) '(let ((_1 (= x 0))) (if _1 1 2)))
 (test (to-anf '(if (= (- x 1) 0) 1 2)) '(let ((_1 (- x 1))) (let ((_2 (= _1 0))) (if _2 1 2))))
@@ -284,16 +287,17 @@
 (test (to-anf '(cond (a 1) (else (+ x (* 2 3)))))
       '(if a 1 (let ((_1 (* 2 3))) (let ((_2 (+ x _1))) _2))))
 (test (to-anf ''foo) ''foo)
-(test (to-anf ''(foo bar)) '(let ((_1 (cons 'bar '()))) (let ((_2 (cons 'foo _1))) _2)))
+(test (to-anf ''(foo bar)) '(let ((_4 (quote foo))) (let ((_5 (quote bar))) (let ((_1 _5)) (let ((_6 (quote ()))) (let ((_2 _6)) (let ((_7 (cons _1 _2))) (let ((_3 _7)) (let ((_8 (cons _4 _3))) _8)))))))))
 (test (ev (to-anf ''(foo (bar) (baz (qux) quux)))) '(foo (bar) (baz (qux) quux)))
 (test (to-anf '(f (let ((x 1)) x))) '(let ((x 1)) (let ((_1 (f x))) _1)))
 (test (to-anf '(f (lambda (x) (+ 1 (* x 2))))) '(f (lambda (x) (let ((_1 (* x 2))) (let ((_2 (+ 1 _1))) _2)))))
 (test (to-anf '(f (let ((x 1)) (* x (+ x 3))) (lambda (x) (display "foo") (+ (* 3 2) x)) (equal? 'foo '(bar baz))))
-      '(let ((x 1)) (let ((_9 (+ x 3))) (let ((_1 _9)) (let ((_10 (* x _1))) (let ((_2 _10)) (let ((_11 (cons 'baz '()))) (let ((_7 _11)) (let ((_12 (cons 'bar _7))) (let ((_8 _12)) (let ((_13 (equal? 'foo _8))) (let ((_14 (f _2 (lambda (x) (let ((_4 (display "foo"))) (let ((_3 _4)) (let ((_5 (* 3 2))) (let ((_6 (+ _5 x))) _6))))) _13))) _14))))))))))))
+      '(let ((x 1)) (let ((_22 (+ x 3))) (let ((_1 _22)) (let ((_23 (* x _1))) (let ((_2 _23)) (let ((_24 (quote foo))) (let ((_15 _24)) (let ((_25 (quote bar))) (let ((_16 _25)) (let ((_10 _16)) (let ((_26 (quote baz))) (let ((_17 _26)) (let ((_11 _17)) (let ((_7 _11)) (let ((_27 (quote ()))) (let ((_18 _27)) (let ((_12 _18)) (let ((_8 _12)) (let ((_28 (cons _7 _8))) (let ((_19 _28)) (let ((_13 _19)) (let ((_9 _13)) (let ((_29 (cons _10 _9))) (let ((_20 _29)) (let ((_14 _20)) (let ((_30 (equal? _15 _14))) (let ((_21 _30)) (let ((_31 (f _2 (lambda (x) (let ((_4 (display "foo"))) (let ((_3 _4)) (let ((_5 (* 3 2))) (let ((_6 (+ _5 x))) _6))))) _21))) _31)))))))))))))))))))))))))))))
 (test (to-anf '(lambda (x) (define foo 1) foo)) '(lambda (x) (let ((foo 1)) foo)))
 (test (to-anf '(lambda (x y) (define (foo x) x) (define bar (+ x y)) (foo bar)))
       '(lambda (x y) (letrec ((foo (lambda (x) x))) (let ((_1 (+ x y))) (let ((bar _1)) (foo bar))))))
-
+(test (to-anf '(f (if a b c)))
+      '(let ((_1 (if a b c))) (let ((_2 (f _1))) _2)))
 
 (define anf?-explain #f)
 (define-syntax-rule (explain test explanation value)
