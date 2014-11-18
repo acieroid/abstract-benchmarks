@@ -27,7 +27,8 @@
 ;; true for expressions that don't need to extract definitions to become atomic
 (define (extract-free? exp)
   (or (atom? exp) (equal? (car exp) 'lambda) (equal? (car exp) 'quote)
-      (equal? (car exp) 'let) (equal? (car exp) 'letrec) (equal? (car exp) 'let*)))
+      ;; (equal? (car exp) 'let) (equal? (car exp) 'letrec) (equal? (car exp) 'let*)
+      ))
 
 (check-true (extract-free? 'foo))
 (check-true (extract-free? '(lambda (x) x)))
@@ -58,9 +59,11 @@
 (set! id 0)
 (check-equal? (newid) '_1)
 (check-equal? (newid) '_2)
+(define-syntax-rule (test x y)
+  (let ()
+    (set! id 0)
+    (check-equal? x y)))
 
-;; (set! x (+ x 1)) -> [(let ((_x0 (+ x 1))) __) _x0]
-;; ((id f) (id x)) -> [(let ((_idf (id f))) (let ((_idx (id x))) (let (_call (_idf _idx))))) _call]
 (define (extract-defs exp)
   (cond
    ((extract-free? exp) (cons '__ exp))
@@ -72,7 +75,17 @@
     (match (extract-defs (cadr exp))
       [(cons defs var)
        (cons defs `(if ,var ,(caddr exp) ,(cadddr exp)))]))
+   ((or (equal? (car exp) 'let) (equal? (car exp) 'letrec))
+    (let ((binding (caadr exp)))
+      (match (extract-defs (cadr binding))
+        [(cons defs-binding var-binding)
+         (match (extract-defs (caddr exp))
+           [(cons defs var)
+            (cons
+             (insert-in defs-binding
+                        (insert-in `(,(car exp) ((,(car binding) ,var-binding)) __) defs)) var)])])))
    (else
+    ;; Function call
     (match (foldl (lambda (e acc)
                    (match (extract-defs e)
                      [(cons defs var)
@@ -85,12 +98,17 @@
          (cons (insert-in defs `(let ((,var ,(reverse rev-vars))) __))
                var))]))))
 
-(set! id 0)
-(check-equal? (extract-defs '(set! x (+ x 1))) '((let ((_1 (+ x 1))) __) . (set! x _1)))
-(check-equal? (extract-defs '((id f) (id x))) '((let ((_2 (id f))) (let ((_3 (id x))) (let ((_4 (_2 _3))) __))) . _4))
-(check-equal? (extract-defs '(let ((x (set! x 1))) y)) '(__ . (let ((x (set! x 1))) y)))
-(check-equal? (extract-defs '(if (> x 1) a b)) '((let ((_5 (> x 1))) __) . (if _5 a b)))
-(check-equal? (extract-defs '(let ((x (set! (+ x 1)))) y)) '((let ((_6 (+ x 1))) __) . (let ((x (set! x _6))) y)))
+(test (extract-defs '(set! x (+ x 1))) '((let ((_1 (+ x 1))) __) . (set! x _1)))
+(test (extract-defs '((id f) (id x))) '((let ((_1 (id f))) (let ((_2 (id x))) (let ((_3 (_1 _2))) __))) . _3))
+(test (extract-defs '(let ((x 1)) x)) '((let ((x 1)) __) . x))
+;; TODO
+(test (extract-defs '(let ((x (set! x 1))) y)) '((let ((x (set! x 1))) __) . y))
+(test (extract-defs '(if (> x 1) a b)) '((let ((_1 (> x 1))) __) . (if _1 a b)))
+(test (extract-defs '(f x (+ y 1))) '((let ((_1 (+ y 1))) (let ((_2 (f x _1))) __)) . _2))
+(test (extract-defs '(let ((x 1)) x)) '((let ((x 1)) __) . x))
+(test (extract-defs '(f (let ((x 1)) x))) '((let ((x 1)) (let ((_1 (f x))) __)) . _1))
+;; TODO: fails
+(test (extract-defs '(let ((x (set! x (+ x 1)))) y)) '((let ((_1 (+ x 1))) (let ((x (set! x _1))) __)) . y))
 
 ;; Only works with a bunch of defines followed by one main expression
 ;; '((define x 1) foo) -> (letrec ((x 1)) foo)
@@ -104,15 +122,11 @@
           (car exp)
           `(begin ,@exp))))
 
-(check-equal? (remove-defines '((define x 1) x)) '(let ((x 1)) x))
-(check-equal? (remove-defines '((define (id x) x) (id 3))) '(letrec ((id (lambda (x) x))) (id 3)))
-(check-equal? (remove-defines '((define a 1) (define b 2) (define (c x) 3) (+ a b (c 1))))
-              '(let ((a 1)) (let ((b 2)) (letrec ((c (lambda (x) 3))) (+ a b (c 1))))))
+(test (remove-defines '((define x 1) x)) '(let ((x 1)) x))
+(test (remove-defines '((define (id x) x) (id 3))) '(letrec ((id (lambda (x) x))) (id 3)))
+(test (remove-defines '((define a 1) (define b 2) (define (c x) 3) (+ a b (c 1))))
+      '(let ((a 1)) (let ((b 2)) (letrec ((c (lambda (x) 3))) (+ a b (c 1))))))
 
-;; (quote foo) -> (quote foo)
-;; (quote (foo bar (baz))) -> (cons 'foo (cons 'bar (cons (cons 'baz '()) '())))
-;; (quote (foo ...) -> (cons 'foo (rec ...))
-;; anything else -> no modification (does not handle quotes nested inside expressions)
 (define (simplify-quote exp)
   (if (and (pair? exp) (equal? (car exp) 'quote))
       (letrec ((loop (lambda (e)
@@ -123,21 +137,21 @@
         (loop (cadr exp)))
       exp))
 
-(check-equal? (simplify-quote ''foo) ''foo)
-(check-equal? (simplify-quote ''(foo bar (baz)))
-              '(cons 'foo (cons 'bar (cons (cons 'baz '()) '()))))
-(check-equal? (eval (simplify-quote ''(foo bar (baz)))) '(foo bar (baz)))
-(check-equal? (eval (simplify-quote ''((foo) (bar (baz (qux))) (baz (bar) (qux quux)))))
-              '((foo) (bar (baz (qux))) (baz (bar) (qux quux))))
-(check-equal? (simplify-quote '(if (> x 1) a b)) '(if (> x 1) a b))
+(test (simplify-quote ''foo) ''foo)
+(test (simplify-quote ''(foo bar (baz)))
+      '(cons 'foo (cons 'bar (cons (cons 'baz '()) '()))))
+(test (eval (simplify-quote ''(foo bar (baz)))) '(foo bar (baz)))
+(test (eval (simplify-quote ''((foo) (bar (baz (qux))) (baz (bar) (qux quux)))))
+      '((foo) (bar (baz (qux))) (baz (bar) (qux quux))))
+(test (simplify-quote '(if (> x 1) a b)) '(if (> x 1) a b))
 
 (define (make-begin exps)
   (if (= (length exps) 1)
       (car exps)
       `(begin ,@exps)))
 
-(check-equal? (make-begin '(foo)) 'foo)
-(check-equal? (make-begin '(foo bar)) '(begin foo bar))
+(test (make-begin '(foo)) 'foo)
+(test (make-begin '(foo bar)) '(begin foo bar))
 
 (define (remove-cond exp)
   (if (and (pair? exp) (equal? (car exp) 'cond))
@@ -153,10 +167,10 @@
                        #f)))))
       exp))
 
-(check-equal? (remove-cond '(cond ((= x 1) a) ((= x 2) b) ((= x 3) c) (else d)))
-              '(if (= x 1) a (if (= x 2) b (if (= x 3) c d))))
-(check-equal? (remove-cond '(cond ((= x 1) a b c) (else d e f)))
-              '(if (= x 1) (begin a b c) (begin d e f)))
+(test (remove-cond '(cond ((= x 1) a) ((= x 2) b) ((= x 3) c) (else d)))
+      '(if (= x 1) a (if (= x 2) b (if (= x 3) c d))))
+(test (remove-cond '(cond ((= x 1) a b c) (else d e f)))
+      '(if (= x 1) (begin a b c) (begin d e f)))
 
 ;; Won't preverve semantics in the presence of mutual recursion. To use
 ;; mutual-recursion, the input program has to be modified to explicitely do a
@@ -177,14 +191,13 @@
         exp))
       exp))
 
-;; (let ((x 1) (y 2)) body) -> (let ((x 1)) (let ((y 2)) (begin body)))
-(check-equal? (simplify-lets '(let ((x 1) (y 2)) body)) '(let ((x 1)) (let ((y 2)) body)))
-(check-equal? (simplify-lets '(let ((x 1) (y 2)) a b)) '(let ((x 1)) (let ((y 2)) (begin a b))))
-(check-equal? (simplify-lets '(let* ((x 1) (y 2)) body)) '(let ((x 1)) (let ((y 2)) body))) ; get rid of let*
-(check-equal? (simplify-lets '(letrec ((x 1) (y 2)) body)) '(letrec ((x 1)) (letrec ((y 2)) body)))
-;; TODO:
-;; (check-equal? (simplify-lets '(letrec ((x (lambda () (y))) (y (lambda () (x)))) body)
-;;               '(let ((x #f)) (let ((y (lambda () (x)))) (begin (set! x (lambda () (y))) body))))
+(test (simplify-lets '(let ((x 1) (y 2)) body)) '(let ((x 1)) (let ((y 2)) body)))
+(test (simplify-lets '(let ((x 1) (y 2)) a b)) '(let ((x 1)) (let ((y 2)) (begin a b))))
+(test (simplify-lets '(let* ((x 1) (y 2)) body)) '(let ((x 1)) (let ((y 2)) body))) ; get rid of let*
+(test (simplify-lets '(letrec ((x 1) (y 2)) body)) '(letrec ((x 1)) (letrec ((y 2)) body)))
+;; TODO: fails for mutual recursion
+(test (simplify-lets '(letrec ((x (lambda () (y))) (y (lambda () (x)))) body))
+      '(let ((x #f)) (let ((y (lambda () (x)))) (begin (set! x (lambda () (y))) body))))
 
 (define (to-anf exp)
   (cond
@@ -235,50 +248,47 @@
                  (and acc (extract-free? e)))
                #t
                exp)
-        exp
-        (match (extract-defs exp)
+        (map to-anf exp)
+        (match (extract-defs (map to-anf exp))
           [(cons defs var) (insert-in defs var)])))
    (else (display "Can't deal with expression: ") (display exp))))
 
-(set! id 0)
-(check-equal? (to-anf 'x) 'x)
-(check-equal? (to-anf '(lambda (x) x)) '(lambda (x) x))
+(test (to-anf 'x) 'x)
+(test (to-anf '(lambda (x) x)) '(lambda (x) x))
 ;; TODO: could be improved
-(check-equal? (to-anf '(lambda (x) (+ (* x x) x))) '(lambda (x) (let ((_1 (* x x))) (let ((_2 (+ _1 x))) _2))))
-(check-equal? (to-anf '(lambda (x) x x)) '(lambda (x) (let ((_3 x)) x)))
-(check-equal? (to-anf '(set! x 1)) '(set! x 1))
-(check-equal? (to-anf '(set! x (+ x 1))) '(let ((_4 (+ x 1))) (set! x _4)))
-(check-equal? (to-anf '(set! x (+ (* x 2) 1))) '(let ((_5 (* x 2))) (let ((_6 (+ _5 1))) (set! x _6))))
-(check-equal? (to-anf '(if a b c)) '(if a b c))
-(check-equal? (to-anf '(if (= x 0) 1 2)) '(let ((_7 (= x 0))) (if _7 1 2)))
-(check-equal? (to-anf '(if (= (- x 1) 0) 1 2)) '(let ((_8 (- x 1))) (let ((_9 (= _8 0))) (if _9 1 2))))
-(check-equal? (to-anf '(if a (* x 1) 2)) '(if a (* x 1) 2))
-(check-equal? (to-anf '(if a (* (+ x 1) 2) 2)) '(if a (let ((_10 (+ x 1))) (let ((_11 (* _10 2))) _11)) 2))
-(check-equal? (to-anf '(if a b (* (+ x 1) 2))) '(if a b (let ((_12 (+ x 1))) (let ((_13 (* _12 2))) _13))))
-(check-equal? (to-anf '(if (= x 0) (* (+ x 1) 2) (* (+ x 2) 3)))
-              '(let ((_14 (= x 0))) (if _14
-                                        (let ((_15 (+ x 1))) (let ((_16 (* _15 2))) _16))
-                                        (let ((_17 (+ x 2))) (let ((_18 (* _17 3))) _18)))))
-(check-equal? (to-anf '(begin 1)) '1)
-(check-equal? (to-anf '(begin 1 2)) '(let ((_19 1)) 2))
-(check-equal? (to-anf '(begin (+ x 1) (* x (+ x 2)) (* (+ x 2) 2)))
-              ;; TODO: output could be improved
-              (let ((_24 (+ x 1))) (let ((_20 _24)) (let ((_21 (let ((_25 (+ x 2))) (let ((_22 _25)) (let ((_26 (* x _22))) (let ((_23 _26)) _23)))))) (let ((_27 (+ x 2))) (let ((_28 (* _27 2))) _28))))))
-(set! id 0)
-(check-equal? (to-anf '(cond ((= x 0) 0) ((> x 0) 1) (else -1)))
-              '(let ((_1 (= x 0))) (if _1 0 (let ((_2 (> x 0))) (if _2 1 -1)))))
-(check-equal? (to-anf '(cond (a (+ x (* 2 3))) (else 1)))
-              '(if a (let ((_3 (* 2 3))) (let ((_4 (+ x _3))) _4)) 1))
-(check-equal? (to-anf '(cond (a 1) (else (+ x (* 2 3)))))
-              '(if a 1 (let ((_5 (* 2 3))) (let ((_6 (+ x _5))) _6))))
-(check-equal? (to-anf ''foo) ''foo)
-(check-equal? (to-anf ''(foo bar)) '(let ((_7 (cons 'bar '()))) (let ((_8 (cons 'foo _7))) _8)))
-(check-equal? (eval (to-anf ''(foo (bar) (baz (qux) quux)))) '(foo (bar) (baz (qux) quux)))
-
-(set! id 0)
-(check-equal? (to-anf '(f (let ((x 1)) x))) '(let ((x 1)) (f x)))
-(check-equal? (to-anf '(f (lambda (x) (+ 1 (* x 2))))) '(f (lambda (x) (let ((_1 (* x 2))) (let ((_2 (+ 1 _1))) _2) _2))))
-;; (check-equal? (to-anf '(f (let ((x 1)) (* x (+ x 3))) (lambda (x) (display "foo") (+ (* 3 2) x)) (equal? 'foo '(bar baz)))) TODO)
+(test (to-anf '(lambda (x) (+ (* x x) x))) '(lambda (x) (let ((_1 (* x x))) (let ((_2 (+ _1 x))) _2))))
+(test (to-anf '(lambda (x) x x)) '(lambda (x) (let ((_1 x)) x)))
+(test (to-anf '(set! x 1)) '(set! x 1))
+(test (to-anf '(set! x (+ x 1))) '(let ((_1 (+ x 1))) (set! x _1)))
+(test (to-anf '(set! x (+ (* x 2) 1))) '(let ((_1 (* x 2))) (let ((_2 (+ _1 1))) (set! x _2))))
+(test (to-anf '(if a b c)) '(if a b c))
+(test (to-anf '(if (= x 0) 1 2)) '(let ((_1 (= x 0))) (if _1 1 2)))
+(test (to-anf '(if (= (- x 1) 0) 1 2)) '(let ((_1 (- x 1))) (let ((_2 (= _1 0))) (if _2 1 2))))
+(test (to-anf '(if a (* x 1) 2)) '(if a (* x 1) 2))
+(test (to-anf '(if a (* (+ x 1) 2) 2)) '(if a (let ((_1 (+ x 1))) (let ((_2 (* _1 2))) _2)) 2))
+(test (to-anf '(if a b (* (+ x 1) 2))) '(if a b (let ((_1 (+ x 1))) (let ((_2 (* _1 2))) _2))))
+(test (to-anf '(if (= x 0) (* (+ x 1) 2) (* (+ x 2) 3)))
+      '(let ((_1 (= x 0))) (if _1
+                               (let ((_2 (+ x 1))) (let ((_3 (* _2 2))) _3))
+                               (let ((_4 (+ x 2))) (let ((_5 (* _4 3))) _5)))))
+(test (to-anf '(begin 1)) '1)
+(test (to-anf '(begin 1 2)) '(let ((_1 1)) 2))
+(test (to-anf '(begin (+ x 1) (* x (+ x 2)) (* (+ x 2) 2)))
+      ;; TODO: output could be improved
+      '(let ((_5 (+ x 1))) (let ((_1 _5)) (let ((_6 (+ x 2))) (let ((_3 _6)) (let ((_7 (* x _3))) (let ((_4 _7)) (let ((_2 _4)) (let ((_8 (+ x 2))) (let ((_9 (* _8 2))) _9))))))))))
+(test (to-anf '(cond ((= x 0) 0) ((> x 0) 1) (else -1)))
+      '(let ((_1 (= x 0))) (if _1 0 (let ((_2 (> x 0))) (if _2 1 -1)))))
+(test (to-anf '(cond (a (+ x (* 2 3))) (else 1)))
+      '(if a (let ((_1 (* 2 3))) (let ((_2 (+ x _1))) _2)) 1))
+(test (to-anf '(cond (a 1) (else (+ x (* 2 3)))))
+      '(if a 1 (let ((_1 (* 2 3))) (let ((_2 (+ x _1))) _2))))
+(test (to-anf ''foo) ''foo)
+(test (to-anf ''(foo bar)) '(let ((_1 (cons 'bar '()))) (let ((_2 (cons 'foo _1))) _2)))
+(test (eval (to-anf ''(foo (bar) (baz (qux) quux)))) '(foo (bar) (baz (qux) quux)))
+(test (to-anf '(f (let ((x 1)) x))) '(let ((x 1)) (let ((_1 (f x))) _1)))
+(test (to-anf '(f (lambda (x) (+ 1 (* x 2))))) '(f (lambda (x) (let ((_1 (* x 2))) (let ((_2 (+ 1 _1))) _2)))))
+(test (to-anf '(f (let ((x 1)) (* x (+ x 3))) (lambda (x) (display "foo") (+ (* 3 2) x)) (equal? 'foo '(bar baz))))
+      '(let ((x 1)) (let ((_9 (+ x 3))) (let ((_1 _9)) (let ((_10 (* x _1))) (let ((_2 _10)) (let ((_11 (cons 'baz '()))) (let ((_7 _11)) (let ((_12 (cons 'bar _7))) (let ((_8 _12)) (let ((_13 (equal? 'foo _8))) (let ((_14 (f _2 (lambda (x) (let ((_4 (display "foo"))) (let ((_3 _4)) (let ((_5 (* 3 2))) (let ((_6 (+ _5 x))) _6))))) _13))) _14))))))))))))
 
 (define (convert1 exp)
   (to-anf exp))
@@ -286,19 +296,19 @@
 (define (convert exps)
   (to-anf (remove-defines exps)))
 
-(define (test exp)
+(define-syntax-rule (test-eval exp)
   (check-equal? (eval exp) (eval (convert1 exp))))
 
-(test '(let ((x 42)) (set! x (+ x 1))))
-(test '(let ((x 42)) (+ x 1)))
-(test '(* (+ 4 1) 3))
-(test '((lambda (x) (set! x (+ x 1))) 3))
-(test '(let ((x 42)) (+ x (* x 2))))
-(test '(begin 1 2 3))
-(test '(letrec ((x (lambda (x) (+ (* x 2) 3)))) (x 0)))
-(test '((lambda (x) (+ (* x 2) 3)) 10))
-(test '(let ((x 1) (y 2)) y))
-(test '(let ((x 0)) (begin (set! x 1) (set! x 2) x)))
+(test-eval '(let ((x 42)) (set! x (+ x 1))))
+(test-eval '(let ((x 42)) (+ x 1)))
+(test-eval '(* (+ 4 1) 3))
+(test-eval '((lambda (x) (set! x (+ x 1))) 3))
+(test-eval '(let ((x 42)) (+ x (* x 2))))
+(test-eval '(begin 1 2 3))
+(test-eval '(letrec ((x (lambda (x) (+ (* x 2) 3)))) (x 0)))
+(test-eval '((lambda (x) (+ (* x 2) 3)) 10))
+(test-eval '(let ((x 1) (y 2)) y))
+(test-eval '(let ((x 0)) (begin (set! x 1) (set! x 2) x)))
 
 (require racket/cmdline)
 (command-line
