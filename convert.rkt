@@ -4,6 +4,7 @@
 ;;   - let becomes equivalent to let*
 ;;   - no support for mutual recursion
 ;;   - no support (yet) for case
+;; TODO: (cons (quote foo) (quote bar)) should be rewritten with two lets
 
 (require racket/match)
 (require rackunit)
@@ -31,7 +32,7 @@
 
 ;; true for expressions that don't need to extract definitions to become atomic
 (define (extract-free? exp)
-  (or (atom? exp) (equal? (car exp) 'lambda) (equal? (car exp) 'quote)
+  (or (atom? exp) (equal? (car exp) 'lambda)
       ;; (equal? (car exp) 'let) (equal? (car exp) 'letrec) (equal? (car exp) 'let*)
       ))
 
@@ -68,50 +69,6 @@
   (let ()
     (set! id 0)
     (check-equal? x y)))
-
-(define (extract-defs exp)
-  (cond
-   ((extract-free? exp) (cons '__ exp))
-   ((equal? (car exp) 'set!)
-    (match (extract-defs (caddr exp))
-      [(cons defs var)
-       (cons defs `(set! ,(cadr exp) ,var))]))
-   ((equal? (car exp) 'if)
-    (match (extract-defs (cadr exp))
-      [(cons defs var)
-       (cons defs `(if ,var ,(caddr exp) ,(cadddr exp)))]))
-   ((or (equal? (car exp) 'let) (equal? (car exp) 'letrec))
-    (let ((binding (caadr exp)))
-      (match (extract-defs (cadr binding))
-        [(cons defs-binding var-binding)
-         (match (extract-defs (caddr exp))
-           [(cons defs var)
-            (cons
-             (insert-in defs-binding
-                        (insert-in `(,(car exp) ((,(car binding) ,var-binding)) __) defs)) var)])])))
-   (else
-    ;; Function call
-    (match (foldl (lambda (e acc)
-                   (match (extract-defs e)
-                     [(cons defs var)
-                      (cons (insert-in (car acc) defs)
-                            (cons var (cdr acc)))]))
-                  (cons '__ '())
-                 exp)
-      [(cons defs rev-vars)
-       (let ((var (newid)))
-         (cons (insert-in defs `(let ((,var ,(reverse rev-vars))) __))
-               var))]))))
-
-(test (extract-defs '(set! x (+ x 1))) '((let ((_1 (+ x 1))) __) . (set! x _1)))
-(test (extract-defs '((id f) (id x))) '((let ((_1 (id f))) (let ((_2 (id x))) (let ((_3 (_1 _2))) __))) . _3))
-(test (extract-defs '(let ((x 1)) x)) '((let ((x 1)) __) . x))
-(test (extract-defs '(let ((x (set! x 1))) y)) '((let ((x (set! x 1))) __) . y))
-(test (extract-defs '(if (> x 1) a b)) '((let ((_1 (> x 1))) __) . (if _1 a b)))
-(test (extract-defs '(f x (+ y 1))) '((let ((_1 (+ y 1))) (let ((_2 (f x _1))) __)) . _2))
-(test (extract-defs '(let ((x 1)) x)) '((let ((x 1)) __) . x))
-(test (extract-defs '(f (let ((x 1)) x))) '((let ((x 1)) (let ((_1 (f x))) __)) . _1))
-(test (extract-defs '(let ((x (set! x (+ x 1)))) y)) '((let ((_1 (+ x 1))) (let ((x (set! x _1))) __)) . y))
 
 (define (make-begin exps)
   (if (= (length exps) 1)
@@ -198,6 +155,51 @@
 ;; (test (simplify-lets '(letrec ((x (lambda () (y))) (y (lambda () (x)))) body))
 ;;       '(let ((x #f)) (let ((y (lambda () (x)))) (begin (set! x (lambda () (y))) body))))
 
+(define (extract-defs exp)
+  (cond
+   ((extract-free? exp) (cons '__ exp))
+   ((equal? (car exp) 'set!)
+    (match (extract-defs (caddr exp))
+      [(cons defs var)
+       (cons defs `(set! ,(cadr exp) ,var))]))
+   ((equal? (car exp) 'if)
+    (match (extract-defs (cadr exp))
+      [(cons defs var)
+       (cons defs `(if ,var ,(caddr exp) ,(cadddr exp)))]))
+   ((or (equal? (car exp) 'let) (equal? (car exp) 'letrec))
+    (let ((binding (caadr exp)))
+      (match (extract-defs (cadr binding))
+        [(cons defs-binding var-binding)
+         (match (extract-defs (caddr exp))
+           [(cons defs var)
+            (cons
+             (insert-in defs-binding
+                        (insert-in `(,(car exp) ((,(car binding) ,var-binding)) __) defs)) var)])])))
+   (else
+    ;; Function call
+    (match (foldl (lambda (e acc)
+                   (match (extract-defs e)
+                     [(cons defs var)
+                      (cons (insert-in (car acc) defs)
+                            (cons var (cdr acc)))]))
+                  (cons '__ '())
+                 exp)
+      [(cons defs rev-vars)
+       (let ((var (newid)))
+         (cons (insert-in defs `(let ((,var ,(reverse rev-vars))) __))
+               var))]))))
+
+(test (extract-defs '(set! x (+ x 1))) '((let ((_1 (+ x 1))) __) . (set! x _1)))
+(test (extract-defs '(set! x '(foo ()))) '((let ((_1 (+ x 1))) __) . (set! x _1)))
+(test (extract-defs '((id f) (id x))) '((let ((_1 (id f))) (let ((_2 (id x))) (let ((_3 (_1 _2))) __))) . _3))
+(test (extract-defs '(let ((x 1)) x)) '((let ((x 1)) __) . x))
+(test (extract-defs '(let ((x (set! x 1))) y)) '((let ((x (set! x 1))) __) . y))
+(test (extract-defs '(if (> x 1) a b)) '((let ((_1 (> x 1))) __) . (if _1 a b)))
+(test (extract-defs '(f x (+ y 1))) '((let ((_1 (+ y 1))) (let ((_2 (f x _1))) __)) . _2))
+(test (extract-defs '(let ((x 1)) x)) '((let ((x 1)) __) . x))
+(test (extract-defs '(f (let ((x 1)) x))) '((let ((x 1)) (let ((_1 (f x))) __)) . _1))
+(test (extract-defs '(let ((x (set! x (+ x 1)))) y)) '((let ((_1 (+ x 1))) (let ((x (set! x _1))) __)) . y))
+
 (define (to-anf exp)
   (cond
    ;; v
@@ -208,7 +210,7 @@
     `(lambda ,(cadr exp) ,(to-anf (remove-defines (cddr exp)))))
    ;; (set! v e) -> (let ... (set! v ae))
    ((equal? (car exp) 'set!)
-    (match (extract-defs (caddr exp))
+    (match (extract-defs (to-anf (simplify-quote (caddr exp))))
       [(cons defs var) (insert-in defs `(set! ,(cadr exp) ,var))]))
    ;; (if e e e) -> (let ... (if ae ae ae))
    ((equal? (car exp) 'if)
@@ -291,6 +293,7 @@
 (test (to-anf '(lambda (x) (define foo 1) foo)) '(lambda (x) (let ((foo 1)) foo)))
 (test (to-anf '(lambda (x y) (define (foo x) x) (define bar (+ x y)) (foo bar)))
       '(lambda (x y) (letrec ((foo (lambda (x) x))) (let ((_1 (+ x y))) (let ((bar _1)) (foo bar))))))
+
 
 (define anf?-explain #f)
 (define-syntax-rule (explain test explanation value)
@@ -380,6 +383,7 @@
 (check-false (anf? ''(foo bar)))
 (check-true (anf? '(+ x 1)))
 (check-false (anf? '(+ (* 2 3) 3)))
+(check-true (anf? (to-anf '(set! x '(foo bar)))))
 
 (define (convert1 exp)
   (to-anf exp))
