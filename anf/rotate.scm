@@ -1,2 +1,2 @@
 ;; Expected result: "hallo"
-(letrec ((_rotate0 (lambda (_n1 _x2 _y3 _z4) (let ((_p5 (= _n1 0))) (if _p5 _x2 (let ((_p6 (- _n1 1))) (_rotate0 _p6 _y3 _z4 _x2))))))) (_rotate0 41 5 #t "hallo"))
+(letrec ((rotate (lambda (n x y z) (let ((_16 (= n 0))) (if _16 x (let ((_17 (- n 1))) (let ((_18 (rotate _17 y z x))) _18))))))) (rotate 41 5 #t "hallo"))

@@ -1,2 +1,2 @@
 ;; Expected result: 21
-(letrec ((_fib0 (lambda (_n1) (let ((_p2 (< _n1 2))) (if _p2 _n1 (let ((_p3 (- _n1 1))) (let ((_p4 (_fib0 _p3))) (let ((_p5 (- _n1 2))) (let ((_p6 (_fib0 _p5))) (+ _p4 _p6)))))))))) (_fib0 8))
+(letrec ((fib (lambda (n) (let ((_16 (< n 2))) (if _16 n (let ((_21 (- n 1))) (let ((_17 _21)) (let ((_22 (fib _17))) (let ((_18 _22)) (let ((_23 (- n 2))) (let ((_19 _23)) (let ((_24 (fib _19))) (let ((_20 _24)) (let ((_25 (+ _18 _20))) _25)))))))))))))) (fib 8))
