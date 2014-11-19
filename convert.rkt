@@ -1,10 +1,15 @@
 #lang racket
-;; Converts Scheme expressions to ANF by preserving most of the semantics.
+;; Converts Scheme expressions to ANF by preserving most of the semantics. It's
+;; a bit hackish and tries to do the conversion in only one pass. Doing it in
+;; multiple passes could improve the output as well as decrease the number of
+;; incompatibilities. The resulting ANF expression could be cleaned up as it
+;; might contain useless lets, such as (let ((_2 _1)) ...).
+
 ;; Some cases of incompatibilities are:
 ;;   - let becomes equivalent to let*
 ;;   - no support for mutual recursion
 ;;   - no support (yet) for case
-;;   - fails with (cond ((begin ...) ...) ...)
+
 (require racket/match)
 (require rackunit)
 
@@ -14,7 +19,6 @@
 (define-syntax-rule (ev exp)
   (eval exp ns))
 
-;; '(1 2 3) -> '((1 2) . 3
 (define (split-last l)
   (if (null? (cdr l))
       `(() . ,(car l))
@@ -39,7 +43,6 @@
 (check-false (extract-free? '(let ((x 1)) (+ (* x 2))))) ;; can extract defs from let
 (check-false (extract-free? '(+ (* x 2))))
 
-;; insert-in (let ((x 0)) __) x -> (let ((x 0)) x)
 (define (insert-in e1 e2)
   (cond
    ((equal? e1 '__) e2)
@@ -214,7 +217,7 @@
       [(cons defs var) (insert-in defs `(set! ,(cadr exp) ,var))]))
    ;; (if e e e) -> (let ... (if ae ae ae))
    ((equal? (car exp) 'if)
-    (match (extract-defs (cadr exp))
+    (match (extract-defs (to-anf (cadr exp)))
       [(cons defs-cond var-cond)
        (insert-in defs-cond `(if ,var-cond
                               ,(to-anf (caddr exp))
@@ -236,8 +239,8 @@
             (boundvar (caaadr exp))
             (subexp (cadr (caadr exp)))
             (body (caddr exp)))
-        (match (extract-defs subexp)
-          [(cons defs var)(insert-in defs `(,kwd ((,boundvar ,(to-anf var)))
+        (match (extract-defs (to-anf subexp))
+          [(cons defs var) (insert-in defs `(,kwd ((,boundvar ,(to-anf var)))
                                                  ,(to-anf body)))]))))
    ((equal? (car exp) 'cond)
     (to-anf (remove-cond exp)))
@@ -264,7 +267,7 @@
 (test (to-anf '(set! x (+ (* x 2) 1))) '(let ((_3 (* x 2))) (let ((_1 _3)) (let ((_4 (+ _1 1))) (let ((_2 _4)) (set! x _2))))))
 (test (to-anf '(if a b c)) '(if a b c))
 (test (to-anf '(if (= x 0) 1 2)) '(let ((_1 (= x 0))) (if _1 1 2)))
-(test (to-anf '(if (= (- x 1) 0) 1 2)) '(let ((_1 (- x 1))) (let ((_2 (= _1 0))) (if _2 1 2))))
+(test (to-anf '(if (= (- x 1) 0) 1 2)) '(let ((_3 (- x 1))) (let ((_1 _3)) (let ((_4 (= _1 0))) (let ((_2 _4)) (if _2 1 2))))))
 (test (to-anf '(if a (* x 1) 2)) '(if a (* x 1) 2))
 (test (to-anf '(if a (* (+ x 1) 2) 2)) '(if a (let ((_1 (+ x 1))) (let ((_2 (* _1 2))) _2)) 2))
 (test (to-anf '(if a b (* (+ x 1) 2))) '(if a b (let ((_1 (+ x 1))) (let ((_2 (* _1 2))) _2))))
@@ -276,7 +279,7 @@
 (test (to-anf '(begin 1 2)) '(let ((_1 1)) 2))
 (test (to-anf '(begin (+ x 1) (* x (+ x 2)) (* (+ x 2) 2)))
       ;; TODO: output could be improved
-      '(let ((_5 (+ x 1))) (let ((_1 _5)) (let ((_6 (+ x 2))) (let ((_3 _6)) (let ((_7 (* x _3))) (let ((_4 _7)) (let ((_2 _4)) (let ((_8 (+ x 2))) (let ((_9 (* _8 2))) _9))))))))))
+      '(let ((_5 (+ x 1))) (let ((_1 _5)) (let ((_8 (+ x 2))) (let ((_6 _8)) (let ((_3 _6)) (let ((_9 (* x _3))) (let ((_7 _9)) (let ((_4 _7)) (let ((_2 _4)) (let ((_10 (+ x 2))) (let ((_11 (* _10 2))) _11))))))))))))
 (test (to-anf '(cond ((= x 0) 0) ((> x 0) 1) (else -1)))
       '(let ((_1 (= x 0))) (if _1 0 (let ((_2 (> x 0))) (if _2 1 -1)))))
 (test (to-anf '(cond (a (+ x (* 2 3))) (else 1)))
@@ -385,6 +388,7 @@
 (check-true (anf? '(+ x 1)))
 (check-false (anf? '(+ (* 2 3) 3)))
 (check-true (anf? (to-anf '(set! x '(foo bar)))))
+(check-true (anf? (to-anf '(if (begin 1 #t) 2 3))))
 
 (define (convert1 exp)
   (to-anf exp))
@@ -406,6 +410,7 @@
 (test-eval '(let ((x 1) (y 2)) y))
 (test-eval '(let ((x 0)) (begin (set! x 1) (set! x 2) x)))
 
+(define execute (make-parameter #t))
 
 (define (main filename)
   (let* ((content (file->list filename))
@@ -413,13 +418,17 @@
     (set! anf?-explain #t )
     (when (not (anf? anfized))
       (display "Error: expression was not correctly translated to ANF! (resulting expression is not ANF)\n" (current-error-port)))
-    (let ((result (ev `(begin ,@content)))
-          (anf-result (ev anfized)))
-      (when (not (equal?  result anf-result))
-        (display "Error: ANF version does not yield the same result as the initial program" (current-error-port)))
-      (printf ";; Expected result: ~s\n~s\n" result anfized))))
+    (when (execute)
+        (let ((result (ev `(begin ,@content)))
+              (anf-result (ev anfized)))
+          (when (not (equal?  result anf-result))
+            (display "Error: ANF version does not yield the same result as the initial program" (current-error-port)))
+          (printf ";; Expected result: ~s\n" result)))
+    (printf "~s\n" anfized)))
 
 (require racket/cmdline)
 (command-line
+ #:once-each
+ [("-n" "--no-exec") "Don't execute the Scheme programs to check result equality between initial and ANF versions" (execute #f)]
  #:args (filename)
  (main filename))
