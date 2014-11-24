@@ -142,7 +142,7 @@
                               (insert-in acc `(,sym ((,(car binding) ,(simplify-lets (cadr binding)))) __)))
                             '__
                             (cadr exp))
-                     (make-begin (cddr exp)))))
+                     (remove-defines (cddr exp)))))
        ((equal? (car exp) 'let*)
         (simplify-lets (cons 'let (cdr exp))))
        (else
@@ -153,6 +153,7 @@
 (test (simplify-lets '(let ((x 1) (y 2)) a b)) '(let ((x 1)) (let ((y 2)) (begin a b))))
 (test (simplify-lets '(let* ((x 1) (y 2)) body)) '(let ((x 1)) (let ((y 2)) body))) ; get rid of let*
 (test (simplify-lets '(letrec ((x 1) (y 2)) body)) '(letrec ((x 1)) (letrec ((y 2)) body)))
+(test (simplify-lets '(let ((x 1)) (define y 2) y)) '(let ((x 1)) (let ((y 2)) y)))
 ;; TODO: fails for mutual recursion
 ;; (test (simplify-lets '(letrec ((x (lambda () (y))) (y (lambda () (x)))) body))
 ;;       '(let ((x #f)) (let ((y (lambda () (x)))) (begin (set! x (lambda () (y))) body))))
@@ -243,7 +244,7 @@
             (body (caddr exp)))
         (match (extract-defs (to-anf subexp))
           [(cons defs var) (insert-in defs `(,kwd ((,boundvar ,(to-anf var)))
-                                                 ,(to-anf body)))]))))
+                                                  ,(to-anf body)))]))))
    ((equal? (car exp) 'cond)
     (to-anf (remove-cond exp)))
    ((and (equal? (car exp) 'quote) (pair? (cadr exp)))
@@ -300,6 +301,11 @@
       '(lambda (x y) (letrec ((foo (lambda (x) x))) (let ((_1 (+ x y))) (let ((bar _1)) (foo bar))))))
 (test (to-anf '(f (if a b c)))
       '(let ((_1 (if a b c))) (let ((_2 (f _1))) _2)))
+
+
+
+(test (to-anf '(let ((x 1)) (define y 2) x))
+      '(let ((x 1)) (let ((y 2)) x)))
 
 (define anf?-explain #f)
 (define-syntax-rule (explain test explanation value)
@@ -429,6 +435,9 @@
             (display "Error: ANF version does not yield the same result as the initial program" (current-error-port)))
           (printf ";; Expected result: ~s\n" result)))
     (printf "~s\n" anfized)))
+
+;; (require racket/trace)
+;; (trace to-anf)
 
 (require racket/cmdline)
 (command-line
