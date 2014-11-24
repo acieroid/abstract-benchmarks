@@ -123,8 +123,8 @@
 (define (sequence->exp seq)
   (cond ((null? seq) seq)
         ((last-exp? seq) (first-exp seq))
-        (else (make-begin seq))))
-(define (make-begin seq) (cons 'begin seq))
+        (else (mk-begin seq))))
+(define (mk-begin seq) (cons 'begin seq))
 
 (define (application? exp) (pair? exp))
 (define (operator exp) (car exp))

@@ -83,7 +83,7 @@
   (if (and (pair? exp) (pair? (car exp)) (equal? (caar exp) 'define))
       (let ((def (car exp)))
         (if (pair? (cadr def))
-            (insert-in `(letrec ((,(caadr def) (lambda ,(cdadr def) ,(caddr def)))) __) (remove-defines (cdr exp)))
+            (insert-in `(letrec ((,(caadr def) (lambda ,(cdadr def) ,@(cddr def)))) __) (remove-defines (cdr exp)))
             (insert-in `(let ((,(cadr def) ,(caddr def))) __) (remove-defines (cdr exp)))))
       (make-begin exp)))
 
@@ -91,6 +91,8 @@
 (test (remove-defines '((define (id x) x) (id 3))) '(letrec ((id (lambda (x) x))) (id 3)))
 (test (remove-defines '((define a 1) (define b 2) (define (c x) 3) (+ a b (c 1))))
       '(let ((a 1)) (let ((b 2)) (letrec ((c (lambda (x) 3))) (+ a b (c 1))))))
+(test (remove-defines '((define (foo) (define (bar) 1) (bar)) (foo)))
+      '(letrec ((foo (lambda () (define (bar) 1) (bar)))) (foo)))
 
 (define (simplify-quote exp)
   (if (and (pair? exp) (equal? (car exp) 'quote))
@@ -343,6 +345,8 @@
            (explain (anf? (cadar bindings)) "let binding is not ANF" (cadar bindings))
            (explain (= (length body) 1) "let body with more than one expression" body)
            (explain (anf? (car body)) "let body is not ANF" body))))
+   ((equal? (car exp) 'define)
+    (explain #f "define is not ANF" exp))
    ((equal? (car exp) 'cond)
     (explain #f "cond is not ANF" exp))
    ((equal? (car exp) 'quote)
