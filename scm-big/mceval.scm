@@ -1,66 +1,5 @@
 ;; Meta-circular evaluator from SICP
 
-(define (eval exp env)
-  (cond ((self-evaluating? exp) exp)
-        ((variable? exp) (lookup-variable-value exp env))
-        ((quoted? exp) (text-of-quotation exp))
-        ((assignment? exp) (eval-assignment exp env))
-        ((definition? exp) (eval-definition exp env))
-        ((if? exp) (eval-if exp env))
-        ((lambda? exp)
-         (make-procedure (lambda-parameters exp)
-                         (lambda-body exp)
-                         env))
-        ((begin? exp)
-         (eval-sequence (begin-actions exp) env))
-        ((cond? exp) (eval (cond->if exp) env))
-        ((application? exp)
-         (mcapply (eval (operator exp) env)
-                (list-of-values (operands exp) env)))
-        (else
-         (error "Unknown expression type -- EVAL" exp))))
-
-(define (mcapply procedure arguments)
-  (cond ((primitive-procedure? procedure)
-         (apply-primitive-procedure procedure arguments))
-        ((compound-procedure? procedure)
-         (eval-sequence
-           (procedure-body procedure)
-           (extend-environment
-             (procedure-parameters procedure)
-             arguments
-             (procedure-environment procedure))))
-        (else
-         (error
-          "Unknown procedure type -- APPLY" procedure))))
-
-(define (list-of-values exps env)
-  (if (no-operands? exps)
-      '()
-      (cons (eval (first-operand exps) env)
-            (list-of-values (rest-operands exps) env))))
-
-(define (eval-if exp env)
-  (if (true? (eval (if-predicate exp) env))
-      (eval (if-consequent exp) env)
-      (eval (if-alternative exp) env)))
-
-(define (eval-sequence exps env)
-  (cond ((last-exp? exps) (eval (first-exp exps) env))
-        (else (eval (first-exp exps) env)
-              (eval-sequence (rest-exps exps) env))))
-
-(define (eval-assignment exp env)
-  (set-variable-value! (assignment-variable exp)
-                       (eval (assignment-value exp) env)
-                       env)
-  'ok)
-
-(define (eval-definition exp env)
-  (define-variable! (definition-variable exp)
-                    (eval (definition-value exp) env)
-                    env)
-  'ok)
 
 (define (self-evaluating? exp)
   (cond ((number? exp) #t)
@@ -69,15 +8,15 @@
 
 (define (variable? exp) (symbol? exp))
 
-(define (quoted? exp)
-  (tagged-list? exp 'quote))
-
-(define (text-of-quotation exp) (cadr exp))
-
 (define (tagged-list? exp tag)
   (if (pair? exp)
       (eq? (car exp) tag)
       #f))
+
+(define (quoted? exp)
+  (tagged-list? exp 'quote))
+
+(define (text-of-quotation exp) (cadr exp))
 
 (define (assignment? exp)
   (tagged-list? exp 'set!))
@@ -90,6 +29,8 @@
   (if (symbol? (cadr exp))
       (cadr exp)
       (caadr exp)))
+(define (make-lambda parameters body)
+  (cons 'lambda (cons parameters body)))
 (define (definition-value exp)
   (if (symbol? (cadr exp))
       (caddr exp)
@@ -99,9 +40,6 @@
 (define (lambda? exp) (tagged-list? exp 'lambda))
 (define (lambda-parameters exp) (cadr exp))
 (define (lambda-body exp) (cddr exp))
-
-(define (make-lambda parameters body)
-  (cons 'lambda (cons parameters body)))
 
 (define (if? exp) (tagged-list? exp 'if))
 (define (if-predicate exp) (cadr exp))
@@ -120,11 +58,11 @@
 (define (first-exp seq) (car seq))
 (define (rest-exps seq) (cdr seq))
 
+(define (mk-begin seq) (cons 'begin seq))
 (define (sequence->exp seq)
   (cond ((null? seq) seq)
         ((last-exp? seq) (first-exp seq))
         (else (mk-begin seq))))
-(define (mk-begin seq) (cons 'begin seq))
 
 (define (application? exp) (pair? exp))
 (define (operator exp) (car exp))
@@ -133,15 +71,18 @@
 (define (first-operand ops) (car ops))
 (define (rest-operands ops) (cdr ops))
 
+(define (list-of-values exps env)
+  (if (no-operands? exps)
+      '()
+      (cons (eval (first-operand exps) env)
+            (list-of-values (rest-operands exps) env))))
+
 (define (cond? exp) (tagged-list? exp 'cond))
 (define (cond-clauses exp) (cdr exp))
+(define (cond-predicate clause) (car clause))
 (define (cond-else-clause? clause)
   (eq? (cond-predicate clause) 'else))
-(define (cond-predicate clause) (car clause))
 (define (cond-actions clause) (cdr clause))
-(define (cond->if exp)
-  (expand-clauses (cond-clauses exp)))
-
 (define (expand-clauses clauses)
   (if (null? clauses)
       'false                          ; no else clause
@@ -155,6 +96,8 @@
             (make-if (cond-predicate first)
                      (sequence->exp (cond-actions first))
                      (expand-clauses rest))))))
+(define (cond->if exp)
+  (expand-clauses (cond-clauses exp)))
 
 (define (true? x)
   (not (eq? x #f)))
@@ -252,7 +195,6 @@
   (map (lambda (proc) (list 'primitive (cadr proc)))
        primitive-procedures))
 
-
 (define (setup-environment)
   (let ((initial-env
          (extend-environment (primitive-procedure-names)
@@ -266,6 +208,57 @@
 (define (apply-primitive-procedure proc args)
   (apply
    (primitive-implementation proc) args))
+
+(define (eval exp env)
+  (define (eval-sequence exps env)
+    (cond ((last-exp? exps) (eval (first-exp exps) env))
+          (else (eval (first-exp exps) env)
+                (eval-sequence (rest-exps exps) env))))
+  (define (mcapply procedure arguments)
+    (cond ((primitive-procedure? procedure)
+           (apply-primitive-procedure procedure arguments))
+          ((compound-procedure? procedure)
+           (eval-sequence
+             (procedure-body procedure)
+             (extend-environment
+               (procedure-parameters procedure)
+               arguments
+               (procedure-environment procedure))))
+          (else
+           (error
+            "Unknown procedure type -- APPLY" procedure))))
+  (define (eval-if exp env)
+    (if (true? (eval (if-predicate exp) env))
+        (eval (if-consequent exp) env)
+        (eval (if-alternative exp) env)))
+  (define (eval-assignment exp env)
+    (set-variable-value! (assignment-variable exp)
+                         (eval (assignment-value exp) env)
+                         env)
+    'ok)
+  (define (eval-definition exp env)
+    (define-variable! (definition-variable exp)
+                      (eval (definition-value exp) env)
+                      env)
+    'ok)
+  (cond ((self-evaluating? exp) exp)
+        ((variable? exp) (lookup-variable-value exp env))
+        ((quoted? exp) (text-of-quotation exp))
+        ((assignment? exp) (eval-assignment exp env))
+        ((definition? exp) (eval-definition exp env))
+        ((if? exp) (eval-if exp env))
+        ((lambda? exp)
+         (make-procedure (lambda-parameters exp)
+                         (lambda-body exp)
+                         env))
+        ((begin? exp)
+         (eval-sequence (begin-actions exp) env))
+        ((cond? exp) (eval (cond->if exp) env))
+        ((application? exp)
+         (mcapply (eval (operator exp) env)
+                (list-of-values (operands exp) env)))
+        (else
+         (error "Unknown expression type -- EVAL" exp))))
 
 (eval '(define (fac n)
          (if (= n 0)
