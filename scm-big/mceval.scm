@@ -41,8 +41,7 @@
                                                                 (cadddr exp)
                                                                 'false))))
                                       (let ((make-if (lambda (predicate consequent alternative)
-                                                       (list 'if predicate consequent alternative))))
-
+                                                       (cons 'if (cons predicate (cons consequent (cons alternative '())))))))
                                         (let ((begin? (lambda (exp) (tagged-list? exp 'begin))))
                                           (let ((begin-actions (lambda (exp) (cdr exp))))
                                             (let ((last-exp? (lambda (seq) (null? (cdr seq)))))
@@ -85,7 +84,7 @@
                                                                                 (let ((true? (lambda (x) (not (eq? x #f)))))
                                                                                   (let ((false? (lambda (x) (eq? x #f))))
 
-                                                                                    (let ((make-procedure (lambda (parameters body env) (list 'procedure parameters body env))))
+                                                                                    (let ((make-procedure (lambda (parameters body env) (cons 'procedure (cons parameters (cons body (cons env '())))))))
                                                                                       (let ((compound-procedure? (lambda (p) (tagged-list? p 'procedure))))
                                                                                         (let ((procedure-parameters (lambda (p) (cadr p))))
                                                                                           (let ((procedure-body (lambda (p) (caddr p))))
@@ -153,21 +152,15 @@
                                                                                                                       (let ((primitive-implementation (lambda (proc) (cadr proc))))
 
                                                                                                                         (let ((primitive-procedures
-                                                                                                                               (list (list 'car car)
-                                                                                                                                     (list 'cdr cdr)
-                                                                                                                                     (list 'cons cons)
-                                                                                                                                     (list 'null? null?)
-                                                                                                                                     (list '= =)
-                                                                                                                                     (list '* *)
-                                                                                                                                     (list '- -)
-                                                                                                                                     ;; <more primitives>
-                                                                                                                                     )))
+                                                                                                                               (cons (cons '= (cons = '()))
+                                                                                                                                     (cons (cons '* (cons * '()))
+                                                                                                                                           (cons (cons '- (cons - '())) '())))))
                                                                                                                           (let ((primitive-procedure-names (lambda ()
                                                                                                                                                              (map car
                                                                                                                                                                   primitive-procedures))))
 
                                                                                                                             (let ((primitive-procedure-objects (lambda ()
-                                                                                                                                                                 (map (lambda (proc) (list 'primitive (cadr proc)))
+                                                                                                                                                                 (map (lambda (proc) (cons 'primitive (cons (cadr proc) '())))
                                                                                                                                                                       primitive-procedures))))
                                                                                                                               (let ((setup-environment (lambda ()
                                                                                                                                                          (let ((initial-env
