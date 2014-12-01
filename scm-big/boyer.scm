@@ -10,9 +10,10 @@
     (let ((*namelist* '()))
       (let ((*lastlook* '(xxx ())))
         (let ((truep (lambda (x lst)
-                       (if (equal? x '(t))
-                           #t
-                           (member x lst)))))
+                       (let ((t '(t)))
+                         (if (equal? x t)
+                             #t
+                             (member x lst))))))
           (let ((nameprop (lambda (name)
                             (if (eq? name (car *lastlook*))
                                 *lastlook*
@@ -41,8 +42,9 @@
                                    (set! *namelist* (cons (cons name (cons item '())) *namelist*)))))
                            valu)))
                 (let ((reinit-prop! (lambda ()
-                                      (set! *namelist* '())
-                                      (set! *lastlook* '(xxx ())))))
+                                      (let ((lastlook '(xxx ())))
+                                        (set! *namelist* '())
+                                        (set! *lastlook* lastlook)))))
                   (let ((run-benchmark (lambda (benchmark-name benchmark-thunk)
                                          (let ((ten (lambda ()
                                                       (begin
@@ -97,9 +99,10 @@
                                                                           (apply-subst-lst alist (cdr term)))))))))
 
                                 (let ((falsep (lambda (x lst)
-                                                (if (equal? x '(f))
-                                                    #t
-                                                    (member x lst)))))
+                                                (let ((f '(f)))
+                                                  (if (equal? x f)
+                                                      #t
+                                                      (member x lst))))))
 
                                   (let ((one-way-unify1 #f))
                                     (let ((one-way-unify1-lst #f))
@@ -127,8 +130,7 @@
                                                                                                    (get-null (car term)
                                                                                                              'lemmas)))))))))
                                             (let ((setup (lambda ()
-                                                           (add-lemma-lst
-                                                            '((equal (compile form)
+                                                           (let ((lst '((equal (compile form)
                                                                      (reverse (codegen (optimize form)
                                                                                        (nil))))
                                                               (equal (eqp x y)
@@ -497,7 +499,8 @@
                                                               (equal (get j (set i val mem))
                                                                      (if (eqp j i)
                                                                          val
-                                                                         (get j mem))))))))
+                                                                         (get j mem))))))
+                                                             (add-lemma-lst lst)))))
 
                                               (letrec ((tautologyp (lambda (x true-lst false-lst)
                                                                      (cond ((truep x true-lst)
@@ -533,10 +536,8 @@
 
                                                   (let ((test (lambda ()
                                                                 (let ((ans #f)
-                                                                      (term #f))
-                                                                  (set! term
-                                                                        (apply-subst
-                                                                         '((x f (plus (plus a b)
+                                                                      (term #f)
+                                                                      (subst1 '((x f (plus (plus a b)
                                                                                       (plus c (zero))))
                                                                            (y f (times (times a b)
                                                                                        (plus c d)))
@@ -545,12 +546,14 @@
                                                                            (u equal (plus a b)
                                                                               (difference x y))
                                                                            (w lessp (remainder a b)
-                                                                              (member a (length b))))
-                                                                         '(implies (and (implies x y)
-                                                                                        (and (implies y z)
-                                                                                             (and (implies z u)
-                                                                                                  (implies u w))))
-                                                                                   (implies x w))))
+                                                                              (member a (length b)))))
+                                                                      (subst2 '(implies (and (implies x y)
+                                                                                            (and (implies y z)
+                                                                                                 (and (implies z u)
+                                                                                                      (implies u w))))
+                                                                                       (implies x w))))
+                                                                  (set! term
+                                                                        (apply-subst subst1 subst2))
                                                                   (set! ans (tautp term))
                                                                   ans))))
 
